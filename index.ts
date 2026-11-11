@@ -5,6 +5,7 @@ import { openBrowser } from './src/adapters/browser.js';
 import { projectCommand } from './src/application/open-project.js';
 import { Plugin } from '@opencode/plugin';
 import { acquireSharedHub } from './src/bootstrap/shared-hub.js';
+import type { ServerOptions } from './src/types.js';
 import type {
   ObserverContext,
   SessionBridge,
@@ -12,19 +13,20 @@ import type {
 export default Plugin.define({
   id: 'beads.observer',
   async setup(ctx) {
+    const options: ServerOptions = ctx.options;
     const currentProject = await canonicalProject({
-      cwd: ctx.options?.cwd || ctx.location.directory,
+      cwd: options?.cwd || ctx.location.directory,
     });
     const hub = await acquireSharedHub({
-      ...ctx.options,
+      ...options,
       opencodeVersion: ctx.app.version,
-      cwd: ctx.options?.cwd || ctx.location.directory,
+      cwd: options?.cwd || ctx.location.directory,
     });
     let sessionBridge: SessionBridge | undefined;
     try {
       const source = new BeadsSource({
-        ...ctx.options,
-        cwd: ctx.options?.cwd || ctx.location.directory,
+        ...options,
+        cwd: options?.cwd || ctx.location.directory,
       });
       const capabilities: {
         session?: Partial<Plugin.Context['session']>;
