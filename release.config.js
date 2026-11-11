@@ -2,12 +2,15 @@ export default {
   branches: [process.env.RELEASE_BRANCH || 'main'],
   tagFormat: 'v${version}',
   plugins: [
-    './scripts/release-policy.mjs',
+    './dist/scripts/release-policy.js',
     [
       '@semantic-release/release-notes-generator',
       { preset: 'conventionalcommits' },
     ],
-    ['@semantic-release/exec', { prepareCmd: 'npm run build' }],
+    [
+      '@semantic-release/exec',
+      { prepareCmd: 'npm run build && npm run pack:check' },
+    ],
     [
       '@semantic-release/npm',
       { npmPublish: true, tarballDir: 'release-artifacts' },

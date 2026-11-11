@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
+interface PackPreview {
+  files: { path: string }[];
+  unpackedSize: number;
+}
+
 const result = spawnSync(
   'npm',
   ['pack', '--dry-run', '--json', '--ignore-scripts'],
@@ -11,31 +16,35 @@ const result = spawnSync(
   },
 );
 assert.equal(result.status, 0, result.stderr);
-const [pack] = JSON.parse(result.stdout);
+const [pack] = JSON.parse(result.stdout) as PackPreview[];
+assert.ok(pack, 'npm pack returned no package');
 const paths = new Set(pack.files.map((file) => file.path));
-const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
-assert.equal(pkg.bin['beads-observer'], 'src/cli.js');
+const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as {
+  bin: Record<string, string>;
+};
+assert.equal(pkg.bin['beads-observer'], 'dist/src/cli.js');
 assert.ok(
   readFileSync(pkg.bin['beads-observer'], 'utf8').startsWith(
     '#!/usr/bin/env node',
   ),
 );
 for (const required of [
-  'index.js',
+  'dist/index.js',
+  'dist/index.d.ts',
   'package.json',
   'README.md',
   'LICENSE',
-  'src/cli.js',
-  'src/application/observer.js',
-  'src/domain/model.js',
-  'web/index.html',
-  'web/style.css',
-  'web/app.js',
+  'dist/src/cli.js',
+  'dist/src/application/observer.js',
+  'dist/src/domain/model.js',
+  'dist/web/index.html',
+  'dist/web/style.css',
+  'dist/web/app.js',
 ])
   assert.ok(paths.has(required), `Missing runtime file: ${required}`);
 for (const path of paths) {
   assert.ok(
-    /^(index\.js|package\.json|README\.md|LICENSE|opencode\.example\.json|src\/.*\.js|web\/.*\.(js|css|html|png|svg|ico|woff2?))$/.test(
+    /^(package\.json|README\.md|LICENSE|opencode\.example\.json|dist\/index\.(js|d\.ts)|dist\/src\/.*\.(js|d\.ts)|dist\/web\/.*\.(js|d\.ts|css|html|png|svg|ico|woff2?))$/.test(
       path,
     ),
     `Unexpected published file: ${path}`,

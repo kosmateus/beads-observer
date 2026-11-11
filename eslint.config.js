@@ -1,5 +1,6 @@
 import js from '@eslint/js';
 import globals from 'globals';
+import tseslint from 'typescript-eslint';
 
 export default [
   {
@@ -16,8 +17,9 @@ export default [
     ],
   },
   js.configs.recommended,
+  ...tseslint.configs.recommended,
   {
-    files: ['**/*.{js,mjs,cjs}'],
+    files: ['**/*.{js,mjs,cjs,ts}'],
     languageOptions: { globals: globals.node },
     rules: {
       eqeqeq: ['error', 'smart'],
@@ -26,7 +28,8 @@ export default [
       'no-eval': 'error',
       'no-implied-eval': 'error',
       'no-empty': ['error', { allowEmptyCatch: true }],
-      'no-unused-vars': [
+      'no-unused-vars': 'off',
+      '@typescript-eslint/no-unused-vars': [
         'error',
         {
           argsIgnorePattern: '^_',
@@ -36,13 +39,16 @@ export default [
       ],
     },
   },
-  { files: ['web/**/*.js'], languageOptions: { globals: globals.browser } },
   {
-    files: ['test/**/*.js', 'test/**/*.mjs'],
+    files: ['web/**/*.{js,ts}'],
+    languageOptions: { globals: globals.browser },
+  },
+  {
+    files: ['test/**/*.{js,mjs,ts}'],
     rules: { 'require-yield': 'off' },
   },
   {
-    files: ['test/viewport-scroll.mjs'],
+    files: ['test/viewport-scroll.{mjs,ts}'],
     languageOptions: { globals: globals.browser },
   },
 ];

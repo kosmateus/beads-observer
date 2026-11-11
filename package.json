@@ -4,30 +4,35 @@
   "type": "module",
   "description": "Beads board, dependency explorer and issue creation for OpenCode",
   "exports": {
-    ".": "./index.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "start": "node src/cli.js",
-    "demo": "node src/cli.js --demo",
-    "build": "node scripts/build.mjs",
+    "start": "node dist/src/cli.js",
+    "demo": "npm run build && node dist/src/cli.js --demo",
+    "build": "tsx scripts/build.ts",
     "prepack": "npm run build",
-    "test": "node --test test/*.test.js",
+    "test": "npm run build && node --test dist/test/*.test.js",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "pack:check": "node scripts/check-package.mjs",
-    "check": "npm run lint && npm run format:check && npm run build && npm test && npm run pack:check",
-    "release": "semantic-release",
-    "prepare": "husky"
+    "pack:check": "tsx scripts/check-package.ts",
+    "check": "npm run lint && npm run format:check && npm run typecheck && npm test && npm run pack:check",
+    "release": "npm run build && semantic-release",
+    "prepare": "husky",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "files": [
-    "index.js",
-    "src",
-    "web",
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/src",
+    "dist/web",
     "README.md",
     "opencode.example.json",
     "LICENSE"
@@ -42,7 +47,7 @@
   },
   "license": "MIT",
   "bin": {
-    "beads-observer": "src/cli.js"
+    "beads-observer": "dist/src/cli.js"
   },
   "repository": {
     "type": "git",
@@ -76,6 +81,7 @@
     "globals": "17.14.0",
     "husky": "9.1.7",
     "lint-staged": "17.6.0",
+    "playwright": "1.65.0",
     "prettier": "3.9.10",
     "semantic-release": "25.0.9",
     "tsx": "4.23.15",
@@ -83,12 +89,14 @@
     "typescript-eslint": "8.72.2"
   },
   "lint-staged": {
-    "*.{js,mjs,cjs}": [
-      "eslint --fix --max-warnings 0",
-      "prettier --write"
-    ],
     "*.{json,jsonc,yml,yaml,md,css,html}": [
       "prettier --write"
+    ],
+    "*.{js,mjs,cjs,ts}": [
+      "eslint --fix --max-warnings 0",
+      "prettier --write"
     ]
-  }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts"
 }
