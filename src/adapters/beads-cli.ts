@@ -6,6 +6,10 @@ import { array, normalize } from '../domain/model.js';
 import type { Issue, Location, StatusEvent } from '../types.js';
 import { errorInfo } from '../types.js';
 const exec = promisify(execFile);
+type Snapshot = ReturnType<typeof normalize> & {
+  location: Location;
+  beadsVersion: string | null;
+};
 export class MissingBeadsWorkspaceError extends Error {
   readonly code = 'BEADS_NO_WORKSPACE';
   constructor() {
@@ -29,6 +33,7 @@ export function isMissingBeadsWorkspaceError(error: unknown) {
 export class BeadsSource {
   #activeReads = 0;
   #readQueue: (() => void)[] = [];
+  #snapshotRequest: Promise<Snapshot> | null = null;
   cwd: string;
   bdPath: string;
   timeoutMs: number;
@@ -50,14 +55,18 @@ export class BeadsSource {
     cwd,
     bdPath = 'bd',
     timeoutMs = 15000,
+    beadsLocation,
   }: {
     cwd: string;
     bdPath?: string;
     timeoutMs?: number;
+    beadsLocation?: string | null;
   }) {
     this.cwd = cwd;
     this.bdPath = bdPath;
     this.timeoutMs = timeoutMs;
+    // canonicalProject supplied a realpath-verified location when available.
+    this.pinnedLocation = beadsLocation || undefined;
   }
   async execute<T = Record<string, unknown>>(args: string[]): Promise<T> {
     let stdout: string;
@@ -127,8 +136,16 @@ export class BeadsSource {
     await this.location();
     return array<Issue>(issues);
   }
-  async snapshot() {
-    const location = await this.location();
+  snapshot(): Promise<Snapshot> {
+    if (this.#snapshotRequest) return this.#snapshotRequest;
+    this.#snapshotRequest = this.#readSnapshot().finally(() => {
+      this.#snapshotRequest = null;
+    });
+    return this.#snapshotRequest;
+  }
+  async #readSnapshot(): Promise<Snapshot> {
+    // Unpinned sources establish identity first; pinned reads validate after.
+    if (!this.pinnedLocation) await this.location();
     const [issues, ready, blocked] = await Promise.all([
       this.run([
         'list',
@@ -142,7 +159,7 @@ export class BeadsSource {
       this.run(['ready', '--limit', '0']),
       this.run(['blocked']),
     ]);
-    await this.location();
+    const location = await this.location();
     return {
       ...normalize(issues, ready, blocked),
       location,
