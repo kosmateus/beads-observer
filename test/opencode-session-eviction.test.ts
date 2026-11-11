@@ -5,7 +5,7 @@ import { setImmediate } from 'node:timers/promises';
 import type { ObserverContext } from '../src/adapters/opencode-types.js';
 import { memoryStorage } from './fixtures.js';
 
-test('historical rotation beyond 128 contexts retains permanent diff errors, active reads and scope recovery', async (t) => {
+test('historical rotation beyond both context and metadata limits retains permanent diff errors, active reads and scope recovery', async (t) => {
   let now = Date.now();
   t.mock.method(Date, 'now', () => now);
   t.mock.module('node:fs/promises', {
@@ -25,13 +25,14 @@ test('historical rotation beyond 128 contexts retains permanent diff errors, act
   });
   const { observeOpenCodeSessions } =
     await import('../src/adapters/opencode-sessions.js');
-  const historical = Array.from({ length: 260 }, (_, i) => 'history-' + i);
+  const historical = Array.from({ length: 660 }, (_, i) => 'history-' + i);
   const targets = [historical[0], historical[70], historical[180]];
   const blocked = new Set(targets);
   const turns = new Map<string, string>(),
     locations = new Map<string, string>();
   const calls = new Map<string, number>(),
-    contexts = new Map<string, number>();
+    contexts = new Map<string, number>(),
+    gets = new Map<string, number>();
   const queue: string[] = [];
   let wake: (() => void) | undefined;
   const emit = async (sessionID: string, type: string) => {
@@ -44,11 +45,14 @@ test('historical rotation beyond 128 contexts retains permanent diff errors, act
     session: {
       active: async () => ({ active: {} }),
       list: async () => historical.map((id) => ({ id })),
-      get: async ({ sessionID }) => ({
-        id: sessionID,
-        location: { directory: locations.get(sessionID) || '/project' },
-        time: { updated: turns.get(sessionID) === 'user-2' ? 2 : 1 },
-      }),
+      get: async ({ sessionID }) => {
+        gets.set(sessionID, (gets.get(sessionID) || 0) + 1);
+        return {
+          id: sessionID,
+          location: { directory: locations.get(sessionID) || '/project' },
+          time: { updated: turns.get(sessionID) === 'user-2' ? 2 : 1 },
+        };
+      },
       context: async ({ sessionID }) => {
         contexts.set(sessionID, (contexts.get(sessionID) || 0) + 1);
         return [
@@ -88,7 +92,7 @@ test('historical rotation beyond 128 contexts retains permanent diff errors, act
     listIssues: async () => ['test-a'],
   });
   const rotate = async () => {
-    for (let i = 0; i < 120; i++) {
+    for (let i = 0; i < 180; i++) {
       now += 1000;
       await observer.refresh();
     }
@@ -97,7 +101,7 @@ test('historical rotation beyond 128 contexts retains permanent diff errors, act
     await rotate();
     assert.equal(
       records.size,
-      261,
+      661,
       'history is still discovered, not disabled',
     );
     assert.ok(
@@ -156,11 +160,23 @@ test('historical rotation beyond 128 contexts retains permanent diff errors, act
     await emit(previouslySuccessful, 'session.tool.success');
     await observer.refresh();
     const attempts = calls.get(previouslySuccessful);
-    for (const id of historical.slice(0, 180))
-      await emit(id, 'session.text.delta');
+    const newcomers = Array.from({ length: 610 }, (_, i) => 'new-history-' + i);
+    historical.push(...newcomers);
+    for (const id of newcomers) await emit(id, 'session.created');
     await observer.refresh();
+    assert.equal(
+      records.size,
+      1271,
+      'new historical discoveries also remain observed',
+    );
+    const beforeReload = gets.get(previouslySuccessful)!;
     await emit(previouslySuccessful, 'session.text.delta');
     await observer.refresh();
+    assert.equal(
+      gets.get(previouslySuccessful),
+      beforeReload + 1,
+      'metadata was evicted too: a token reload at the same clock time must fetch it again',
+    );
     await rotate();
     assert.equal(
       calls.get(previouslySuccessful),
