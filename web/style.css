@@ -3421,3 +3421,69 @@ main:not(.show-epic):not(.show-issue):not(.show-agent) > :not(#content) {
   font-size: 12px;
   line-height: 1.4;
 }
+
+#manage-projects {
+  width: 100%;
+}
+#project-manager-dialog {
+  display: none;
+}
+#project-manager-dialog[open] {
+  display: block;
+}
+#project-manager-dialog .detail-top {
+  padding-inline: 24px;
+}
+#project-manager-dialog h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 18px;
+}
+.project-manager-help {
+  margin: 18px 24px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+#project-manager-error {
+  margin: 16px 24px;
+  color: var(--red);
+}
+#project-manager-list {
+  padding: 0 24px 24px;
+}
+.project-preference-row {
+  display: grid;
+  gap: 12px;
+  padding: 18px 0;
+  border-top: 1px solid var(--border);
+}
+.project-preference-row strong,
+.project-preference-row small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-preference-row small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.project-preference-row label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.project-preference-row input {
+  min-width: 0;
+  width: 100%;
+}
+.project-preference-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.project-preference-actions button {
+  flex: 1;
+}

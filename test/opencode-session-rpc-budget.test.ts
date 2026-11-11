@@ -5,7 +5,7 @@ import { setImmediate } from 'node:timers/promises';
 import type { ObserverContext } from '../src/adapters/opencode-types.js';
 import { memoryStorage } from './fixtures.js';
 
-test('token storms bound get/context/diff for seven active sessions, 260 historical sessions and a foreign session', async (t) => {
+test('token storms bound active/get/context/diff for seven active sessions, 260 historical sessions and a foreign session', async (t) => {
   let now = Date.now();
   t.mock.method(Date, 'now', () => now);
   t.mock.module('node:fs/promises', {
@@ -57,7 +57,9 @@ test('token storms bound get/context/diff for seven active sessions, 260 histori
             releaseActive = resolve;
           });
         }
-        return Object.fromEntries([...activeIDs].map((id) => [id, {}]));
+        return Object.fromEntries(
+          [...activeIDs].map((id) => [id, { type: 'running' }]),
+        );
       },
       list: async () => {
         counts.list++;

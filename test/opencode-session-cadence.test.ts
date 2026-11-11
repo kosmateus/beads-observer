@@ -24,7 +24,8 @@ test('scheduled snapshots retain a five-second cadence and closing skips queued 
     return {
       storage: memoryStorage(),
       session: {
-        active: async () => Object.fromEntries(ids.map((id) => [id, {}])),
+        active: async () =>
+          Object.fromEntries(ids.map((id) => [id, { type: 'running' }])),
         list: async () => ids.map((id) => ({ id })),
         get: async ({ sessionID }) => ({
           id: sessionID,

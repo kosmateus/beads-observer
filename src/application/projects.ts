@@ -1,24 +1,54 @@
 /** Project registry input port. Each entry owns a separate Observer and subscriptions. */
 import type { ProjectEntry } from '../types.js';
+import type {
+  ProjectPreference,
+  ProjectPreferencePatch,
+} from '../adapters/project-preferences.js';
 export class Projects {
   #entries = new Map<string, ProjectEntry & { off: () => void }>();
+  #preferences: Map<string, ProjectPreference>;
+  #persist?: (
+    preferences: ReadonlyMap<string, ProjectPreference>,
+  ) => Promise<void>;
   #listeners = new Set<(list: ReturnType<Projects['list']>) => void>();
-  list() {
+  constructor(
+    preferences = new Map<string, ProjectPreference>(),
+    persist?: (
+      preferences: ReadonlyMap<string, ProjectPreference>,
+    ) => Promise<void>,
+  ) {
+    this.#preferences = new Map(preferences);
+    this.#persist = persist;
+  }
+  list(includeHidden = false) {
     return [...this.#entries.values()]
-      .map(({ id, name, cwd, observer, hostVersions }) => ({
-        id,
-        name,
-        cwd,
-        hostVersions: hostVersions || [],
-        demo: observer.state.demo,
-        error: observer.state.error,
-        revision: observer.state.revision,
-        issueCount: observer.state.issues.length,
-        location: observer.state.location || null,
-      }))
+      .map(({ id, name, cwd, observer, hostVersions }) => {
+        const saved = this.#preferences.get(id),
+          alias = saved?.alias || null;
+        return {
+          id,
+          name: alias || name,
+          defaultName: name,
+          alias,
+          hidden: saved?.hidden || false,
+          cwd,
+          hostVersions: hostVersions || [],
+          demo: observer.state.demo,
+          error: observer.state.error,
+          revision: observer.state.revision,
+          issueCount: observer.state.issues.length,
+          location: observer.state.location || null,
+        };
+      })
+      .filter((project) => includeHidden || !project.hidden)
       .sort(
         (a, b) => a.name.localeCompare(b.name) || a.cwd.localeCompare(b.cwd),
       );
+  }
+  findByCanonicalRoot(root: string) {
+    return [...this.#entries.values()]
+      .filter((entry) => entry.canonicalRoot === root)
+      .map((entry) => entry.id);
   }
   add(entry: ProjectEntry) {
     if (this.#entries.has(entry.id))
@@ -42,6 +72,29 @@ export class Projects {
       this.#emit();
     }
   }
+  async setPreference(id: string, patch: ProjectPreferencePatch) {
+    const entry = this.#entries.get(id);
+    if (!entry) {
+      throw Object.assign(new Error('Unknown project'), { status: 404 });
+    }
+    const current = this.#preferences.get(id) || {
+        alias: null,
+        hidden: false,
+      },
+      next = {
+        alias: patch.alias === undefined ? current.alias : patch.alias,
+        hidden: patch.hidden === undefined ? current.hidden : patch.hidden,
+      },
+      preferences = new Map(this.#preferences);
+    if (next.alias || next.hidden) preferences.set(id, next);
+    else preferences.delete(id);
+    if (next.alias !== current.alias || next.hidden !== current.hidden) {
+      await this.#persist?.(preferences);
+      this.#preferences = preferences;
+      this.#emit();
+    }
+    return this.list(true).find((project) => project.id === id)!;
+  }
   get(id?: string) {
     if (!id && this.#entries.size === 1)
       return this.#entries.values().next().value!;
@@ -59,6 +112,8 @@ export class Projects {
     const entry = this.get(id);
     return {
       ...entry.observer.state,
+      project:
+        this.#preferences.get(entry.id)?.alias || entry.observer.state.project,
       projectId: entry.id,
       projectPath: entry.cwd,
       hostVersions: entry.hostVersions || [],

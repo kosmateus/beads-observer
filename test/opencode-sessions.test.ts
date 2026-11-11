@@ -107,14 +107,7 @@ test('V2 envelopes without active/diff context methods; independent child, chang
     now += 5000;
     await observer.refresh();
     records = await readSessionRecords(directory, 'project');
-    assert.equal(records[0].status, 'unknown');
-    now += 5000;
-    await observer.refresh();
-    records = await readSessionRecords(directory, 'project');
-    assert.equal(records[0].status, 'unknown');
-    assert.ok(
-      JSON.stringify(records[0]).includes('Session activity unavailable'),
-    );
+    assert.equal(records[0].status, 'interrupted');
     const bridge = (await readdir(directory)).find((x) =>
       x.startsWith('bridge-'),
     );
@@ -122,7 +115,193 @@ test('V2 envelopes without active/diff context methods; independent child, chang
     assert.equal(
       JSON.parse(await readFile(join(directory, bridge), 'utf8'))
         .activityAvailable,
-      false,
+      true,
+    );
+  } finally {
+    await observer.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('running survives transient activity failure only within its grace period and recovers', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'observer-activity-grace-'));
+  let now = 1_000_000,
+    fail = false,
+    invalid = false;
+  const info = {
+    id: 'child',
+    parentID: 'parent',
+    agent: 'general',
+    location: { directory },
+    time: { created: now - 1000, updated: now },
+  };
+  const ctx: ObserverContext = {
+    storage: memoryStorage(),
+    session: {
+      list: async () => ({ data: [info], cursor: {} }),
+      get: async () => ({ data: info }),
+      context: async () => ({
+        data: [{ type: 'user', id: 'message', text: 'Work on task-a' }],
+      }),
+      diff: async () => ({ data: [] }),
+    },
+    event: {
+      async *subscribe({ signal }) {
+        assert.ok(signal);
+        await new Promise((resolve) =>
+          signal.addEventListener('abort', resolve, { once: true }),
+        );
+      },
+    },
+  };
+  const observer = await observeOpenCodeSessions(ctx, {
+    directory,
+    projectId: 'project',
+    cwd: directory,
+    listIssues: async () => ['task-a'],
+    clock: () => now,
+    api: {
+      active: async () => {
+        if (fail) throw Error('temporary read failure');
+        if (invalid) return { data: { child: { type: 'idle' } } };
+        return { data: { child: { type: 'running' } } };
+      },
+      diff: async () => ({ data: [] }),
+    },
+  });
+  try {
+    await observer.refresh();
+    const bridgeFile = (await readdir(directory)).find((name) =>
+      name.startsWith('bridge-'),
+    );
+    assert.ok(bridgeFile);
+    const activityAvailable = async () =>
+      JSON.parse(await readFile(join(directory, bridgeFile), 'utf8'))
+        .activityAvailable;
+    assert.equal(
+      (await readSessionRecords(directory, 'project', undefined, now))[0]
+        .status,
+      'running',
+    );
+    assert.equal(await activityAvailable(), true);
+    invalid = true;
+    now += 5000;
+    await observer.refresh();
+    assert.equal(
+      (await readSessionRecords(directory, 'project', undefined, now))[0]
+        .status,
+      'running',
+      'malformed activity retains the last valid active state during its grace period',
+    );
+    invalid = false;
+    fail = true;
+    now += 5000;
+    await observer.refresh();
+    assert.equal(
+      (await readSessionRecords(directory, 'project', undefined, now))[0]
+        .status,
+      'running',
+    );
+    assert.equal(await activityAvailable(), true);
+    now = 1_015_001;
+    await observer.refresh();
+    assert.equal(
+      (await readSessionRecords(directory, 'project', undefined, now))[0]
+        .status,
+      'unknown',
+    );
+    assert.equal(await activityAvailable(), false);
+    fail = false;
+    now += 5000;
+    await observer.refresh();
+    assert.equal(
+      (await readSessionRecords(directory, 'project', undefined, now))[0]
+        .status,
+      'running',
+    );
+    assert.equal(await activityAvailable(), true);
+  } finally {
+    await observer.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a deleted session worktree becomes archived without a global ENOENT warning', async (t) => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const directory = await mkdtemp(join(tmpdir(), 'observer-session-missing-'));
+  let failRead = false;
+  const info = {
+    id: 'child',
+    agent: 'general',
+    location: { directory },
+    time: { created: Date.now() - 1000, updated: Date.now() },
+  };
+  const ctx: ObserverContext = {
+    storage: memoryStorage(),
+    session: {
+      list: async () => ({ data: [], cursor: {} }),
+      get: async () => {
+        if (failRead) throw Error('temporary permission failure');
+        return { data: info };
+      },
+      context: async () => ({
+        data: [{ type: 'user', id: 'message', text: 'Work on task-a' }],
+      }),
+      diff: async () => ({ data: [] }),
+    },
+    event: {
+      async *subscribe({ signal }) {
+        assert.ok(signal);
+        await new Promise((resolve) =>
+          signal.addEventListener('abort', resolve, { once: true }),
+        );
+      },
+    },
+  };
+  const observer = await observeOpenCodeSessions(ctx, {
+    directory,
+    projectId: 'project',
+    cwd: directory,
+    listIssues: async () => ['task-a'],
+    clock: () => now,
+    api: {
+      active: async () => ({ data: { child: { type: 'running' } } }),
+      diff: async () => ({ data: [] }),
+    },
+  });
+  try {
+    await observer.refresh();
+    let records = await readSessionRecords(directory, 'project');
+    assert.equal(records[0].status, 'running');
+
+    info.location.directory = join(directory, 'deleted-worktree');
+    now += 5000;
+    await observer.refresh();
+    records = await readSessionRecords(directory, 'project');
+    assert.equal(records[0].status, 'unknown');
+    assert.equal(records[0].connected, false);
+
+    const bridgeFile = (await readdir(directory)).find((x) =>
+      x.startsWith('bridge-'),
+    );
+    assert.ok(bridgeFile);
+    const bridge = JSON.parse(
+      await readFile(join(directory, bridgeFile), 'utf8'),
+    );
+    assert.deepEqual(bridge.warnings, []);
+    assert.equal(bridge.activityAvailable, true);
+
+    info.location.directory = directory;
+    failRead = true;
+    await observer.refresh();
+    records = await readSessionRecords(directory, 'project');
+    const warnings = (records[0] as { warnings?: unknown }).warnings;
+    assert.ok(Array.isArray(warnings));
+    assert.match(String(warnings[0]), /temporary permission failure/);
+    assert.deepEqual(
+      JSON.parse(await readFile(join(directory, bridgeFile), 'utf8')).warnings,
+      [],
     );
   } finally {
     await observer.close();

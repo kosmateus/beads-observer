@@ -54,6 +54,7 @@ type SelectId =
 type InputId = 'search' | 'graph-context' | 'create-title';
 type ButtonId =
   | 'new-issue'
+  | 'manage-projects'
   | 'reset-project'
   | 'submit-create'
   | 'cancel-create'
@@ -67,7 +68,8 @@ type AppElement<K extends string> = K extends SelectId
       ? HTMLButtonElement
       : K extends 'create-form' | 'relation-form'
         ? HTMLFormElement
-        : K extends 'create-dialog' | 'relation-dialog'
+        : K extends
+              'create-dialog' | 'relation-dialog' | 'project-manager-dialog'
           ? HTMLDialogElement
           : K extends 'create-description'
             ? HTMLTextAreaElement
@@ -1418,13 +1420,25 @@ function selectProject(id: string | null, preserveRoute = false) {
   });
 }
 function updateProjects(next: Project[]) {
+  const optionsChanged =
+    next.length !== projectCatalog.length ||
+    next.some((project, index) => {
+      const old = projectCatalog[index];
+      return (
+        old?.id !== project.id ||
+        old?.name !== project.name ||
+        old?.cwd !== project.cwd
+      );
+    });
   projectCatalog = next;
-  $('project-select').replaceChildren();
-  if (!next.length) $('project-select').add(new Option(t('waiting'), ''));
-  for (const project of next)
-    $('project-select').add(
-      new Option(`${project.name} — ${project.cwd}`, project.id),
-    );
+  if (optionsChanged) {
+    $('project-select').replaceChildren();
+    if (!next.length) $('project-select').add(new Option(t('waiting'), ''));
+    for (const project of next)
+      $('project-select').add(
+        new Option(`${project.name} — ${project.cwd}`, project.id),
+      );
+  }
   const selected = next.some((p) => p.id === activeProjectId)
     ? activeProjectId
     : next.find(
@@ -1448,6 +1462,114 @@ $('project-select').addEventListener('change', () => {
     history.pushState(null, '', next);
   }
 });
+type ProjectPreferencePatch = { alias?: string | null; hidden?: boolean };
+async function saveProjectPreference(
+  id: string,
+  patch: ProjectPreferencePatch,
+) {
+  const capabilities = await fetch('/api/capabilities');
+  if (!capabilities.ok) throw Error(t('projectPreferencesError'));
+  const { csrfToken }: Capabilities = await capabilities.json();
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(id)}/preferences`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Observer-Token': csrfToken,
+      },
+      body: JSON.stringify(patch),
+    },
+  );
+  const result: { error?: string } = await response.json();
+  if (!response.ok) throw Error(result.error || t('projectPreferencesError'));
+}
+async function loadProjectPreferences() {
+  const error = $('project-manager-error');
+  error.hidden = true;
+  try {
+    const response = await fetch('/api/projects/preferences');
+    if (!response.ok) throw Error(t('projectPreferencesError'));
+    const projects: Project[] = await response.json();
+    const list = $('project-manager-list');
+    list.replaceChildren();
+    if (!projects.length) {
+      const empty = document.createElement('p');
+      empty.className = 'muted';
+      empty.textContent = t('noProjects');
+      list.append(empty);
+    }
+    for (const project of projects) {
+      const row = document.createElement('article'),
+        heading = document.createElement('strong'),
+        path = document.createElement('small'),
+        label = document.createElement('label'),
+        input = document.createElement('input'),
+        actions = document.createElement('div'),
+        save = document.createElement('button'),
+        toggle = document.createElement('button');
+      row.className = 'project-preference-row';
+      heading.textContent = project.name;
+      path.textContent = project.cwd;
+      path.title = project.cwd;
+      label.textContent = t('projectDisplayName');
+      input.type = 'text';
+      input.maxLength = 80;
+      input.value = project.alias || '';
+      input.placeholder = project.defaultName || project.name;
+      input.setAttribute(
+        'aria-label',
+        `${t('projectDisplayName')}: ${project.name}`,
+      );
+      label.append(input);
+      actions.className = 'project-preference-actions';
+      save.type = 'button';
+      save.textContent = t('saveProjectName');
+      save.onclick = async () => {
+        try {
+          await saveProjectPreference(project.id, {
+            alias: input.value.trim() || null,
+          });
+          await loadProjectPreferences();
+        } catch (caught) {
+          error.hidden = false;
+          error.textContent =
+            caught instanceof Error
+              ? caught.message
+              : t('projectPreferencesError');
+        }
+      };
+      toggle.type = 'button';
+      toggle.textContent = t(project.hidden ? 'restoreToList' : 'hideFromList');
+      toggle.onclick = async () => {
+        try {
+          await saveProjectPreference(project.id, {
+            hidden: !project.hidden,
+          });
+          await loadProjectPreferences();
+        } catch (caught) {
+          error.hidden = false;
+          error.textContent =
+            caught instanceof Error
+              ? caught.message
+              : t('projectPreferencesError');
+        }
+      };
+      actions.append(save, toggle);
+      row.append(heading, path, label, actions);
+      list.append(row);
+    }
+  } catch (caught) {
+    error.hidden = false;
+    error.textContent =
+      caught instanceof Error ? caught.message : t('projectPreferencesError');
+  }
+}
+$('manage-projects').onclick = () => {
+  $('project-manager-dialog').showModal();
+  void loadProjectPreferences();
+};
+$('close-project-manager').onclick = () => $('project-manager-dialog').close();
 const catalogStream = new EventSource('/api/projects/events');
 catalogStream.onmessage = (e) => {
   try {
