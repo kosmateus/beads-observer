@@ -1,6 +1,22 @@
 import { readFile, readdir, readlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import type {
+  Activity,
+  OpenCodeAPI,
+  RequestOptions,
+} from './opencode-types.js';
+import type { SessionDiff } from '../types.js';
+
+interface Endpoint {
+  url: string;
+  password?: string;
+}
+interface APIOptions {
+  pid?: number;
+  env?: NodeJS.ProcessEnv;
+  argv?: string[];
+}
 
 // V2.1.3 exposes active/diff over HTTP, but omits them from the plugin Context.
 // Never discover/start another service: activity belongs to this exact process.
@@ -8,10 +24,15 @@ export function openCodeAPI({
   pid = process.pid,
   env = process.env,
   argv = process.argv,
-} = {}) {
-  let endpoint,
+}: APIOptions = {}): OpenCodeAPI {
+  let endpoint: Endpoint | null | undefined,
     checkedAt = 0;
-  async function request(base, path, password, signal) {
+  async function request<T>(
+    base: string,
+    path: string,
+    password: string | undefined,
+    signal: AbortSignal,
+  ): Promise<T> {
     const url = new URL(base);
     if (
       url.protocol !== 'http:' ||
@@ -30,9 +51,9 @@ export function openCodeAPI({
     if (!response.ok) throw Error(`OpenCode API HTTP ${response.status}`);
     return response.json();
   }
-  async function discover(signal) {
+  async function discover(signal: AbortSignal) {
     if (endpoint && Date.now() - checkedAt < 30000) return endpoint;
-    const candidates = [];
+    const candidates: Endpoint[] = [];
     try {
       const info = JSON.parse(
         await readFile(
@@ -43,7 +64,7 @@ export function openCodeAPI({
           ),
           'utf8',
         ),
-      );
+      ) as Endpoint & { pid: number };
       if (info.pid === pid)
         candidates.push({ url: info.url, password: info.password });
     } catch {}
@@ -87,7 +108,7 @@ export function openCodeAPI({
       } catch {}
     for (const candidate of candidates)
       try {
-        const info = await request(
+        const info = await request<{ pid: number }>(
           candidate.url,
           '/api/info',
           candidate.password,
@@ -105,21 +126,24 @@ export function openCodeAPI({
       'API of this OpenCode process is unavailable (activity unknown)',
     );
   }
-  async function get(path, { signal } = {}) {
+  async function get<T>(
+    path: string,
+    { signal }: RequestOptions = {},
+  ): Promise<T> {
     const timeout = AbortSignal.timeout(5000),
       combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
     const target = await discover(combined);
     try {
-      return await request(target.url, path, target.password, combined);
+      return await request<T>(target.url, path, target.password, combined);
     } catch (error) {
       endpoint = null;
       throw error;
     }
   }
   return {
-    active: (options) => get('/api/session/active', options),
+    active: (options) => get<Activity>('/api/session/active', options),
     diff: ({ sessionID, context = 3 }, options) =>
-      get(
+      get<SessionDiff[]>(
         `/api/session/${encodeURIComponent(sessionID)}/diff?context=${context}`,
         options,
       ),

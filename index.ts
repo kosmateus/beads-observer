@@ -5,6 +5,10 @@ import { openBrowser } from './src/adapters/browser.js';
 import { projectCommand } from './src/application/open-project.js';
 import { Plugin } from '@opencode/plugin';
 import { acquireSharedHub } from './src/bootstrap/shared-hub.js';
+import type {
+  ObserverContext,
+  SessionBridge,
+} from './src/adapters/opencode-types.js';
 export default Plugin.define({
   id: 'beads.observer',
   async setup(ctx) {
@@ -16,26 +20,35 @@ export default Plugin.define({
       opencodeVersion: ctx.app.version,
       cwd: ctx.options?.cwd || ctx.location.directory,
     });
-    let sessionBridge;
+    let sessionBridge: SessionBridge | undefined;
     try {
       const source = new BeadsSource({
         ...ctx.options,
         cwd: ctx.options?.cwd || ctx.location.directory,
       });
+      const capabilities: {
+        session?: Partial<Plugin.Context['session']>;
+        event?: Partial<Plugin.Context['event']>;
+        storage?: Plugin.Context['storage'];
+      } = ctx;
       if (
-        ctx.session?.list &&
-        ctx.session?.get &&
-        ctx.session?.context &&
-        ctx.event?.subscribe &&
-        ctx.storage
+        capabilities.session?.list &&
+        capabilities.session?.get &&
+        capabilities.session?.context &&
+        capabilities.event?.subscribe &&
+        capabilities.storage
       )
-        sessionBridge = await observeOpenCodeSessions(ctx, {
-          directory: hub.directory,
-          projectId: currentProject.id,
-          cwd: currentProject.cwd,
-          listIssues: () => source.issueCatalog(),
-          beadsLocation: () => source.location(),
-        });
+        // The observer also supports the V2.1 session protocol on older hosts.
+        sessionBridge = await observeOpenCodeSessions(
+          ctx as unknown as ObserverContext,
+          {
+            directory: hub.directory,
+            projectId: currentProject.id,
+            cwd: currentProject.cwd,
+            listIssues: () => source.issueCatalog(),
+            beadsLocation: () => source.location(),
+          },
+        );
       else
         console.warn(
           '[beads.observer] Session discovery unavailable: incomplete OpenCode context',
@@ -50,7 +63,7 @@ export default Plugin.define({
             bind: sessionBridge
               ? async (sessionID, issueId) => {
                   await source.detail(issueId);
-                  await sessionBridge.bind(sessionID, issueId);
+                  await sessionBridge!.bind(sessionID, issueId);
                 }
               : undefined,
           }),
