@@ -6,9 +6,26 @@ import { sessionView } from '../domain/session-view.js';
 import { resolveSessionLinks } from '../domain/session-links.js';
 import { openCodeAPI } from './opencode-api.js';
 import { BeadsSource } from './beads-cli.js';
-const data = (value) =>
-  value && Object.hasOwn(value, 'data') ? value.data : value;
-async function parallel(items, work) {
+import type {
+  SessionDiff,
+  SessionLink,
+  SessionMessage,
+  SessionRecord,
+} from '../types.js';
+import type {
+  Activity,
+  ObserverContext,
+  ObserverSessionInfo,
+  OpenCodeAPI,
+  ResponseData,
+  SessionBridge,
+} from './opencode-types.js';
+
+const data = <T>(value: ResponseData<T>): T =>
+  value && Object.hasOwn(value, 'data')
+    ? (value as { data: T }).data
+    : (value as T);
+async function parallel<T>(items: T[], work: (item: T) => Promise<void>) {
   let cursor = 0;
   await Promise.all(
     Array.from({ length: Math.min(4, items.length) }, async () => {
@@ -18,7 +35,7 @@ async function parallel(items, work) {
 }
 /** Project-scoped V2 session discovery. No dependence on parent execution state. */
 export async function observeOpenCodeSessions(
-  ctx,
+  ctx: ObserverContext,
   {
     directory,
     projectId,
@@ -26,29 +43,42 @@ export async function observeOpenCodeSessions(
     listIssues = async () => [],
     beadsLocation,
     api = openCodeAPI(),
+  }: {
+    directory: string;
+    projectId: string;
+    cwd: string;
+    listIssues?: () => Promise<(string | { id: string })[]>;
+    beadsLocation?: () => Promise<{ path: string }>;
+    api?: OpenCodeAPI;
   },
-) {
+): Promise<SessionBridge> {
   const host = randomUUID(),
-    manual = new Map(),
-    history = new Map(),
-    records = new Map(),
+    manual = new Map<string, string[]>(),
+    history = new Map<string, string[]>(),
+    records = new Map<
+      string,
+      Omit<SessionRecord, 'activeIssueId'> & { activeIssueId: string | null }
+    >(),
     controller = new AbortController();
-  const contextCache = new Map(),
-    remembered = new Map(),
-    dirty = new Set(),
-    scopeCache = new Map();
+  const contextCache = new Map<
+      string,
+      { revision?: string; messages: SessionMessage[]; diffs?: SessionDiff[] }
+    >(),
+    remembered = new Map<string, SessionLink>(),
+    dirty = new Set<string>(),
+    scopeCache = new Map<string, { value: boolean; at: number }>();
   let persisted = '',
-    catalogCursor;
+    catalogCursor: string | undefined;
   let closed = false,
-    pending = null,
-    timer = null,
-    known = new Set(),
+    pending: Promise<void> | null = null,
+    timer: ReturnType<typeof setTimeout> | null = null,
+    known = new Set<string>(),
     catalogAt = 0,
     issueAt = 0,
-    recent = [],
-    previousActive = [],
+    recent: string[] = [],
+    previousActive: string[] = [],
     idleCursor = 0;
-  const filename = (id) =>
+  const filename = (id: string) =>
     join(
       directory,
       `session-${projectId}-${createHash('sha256')
@@ -58,7 +88,7 @@ export async function observeOpenCodeSessions(
   const canonical = await realpath(cwd),
     storageKey = 'beads-observer.sessions.' + projectId;
   const bridgeFile = join(directory, `bridge-${projectId}-${host}.json`);
-  async function belongs(info) {
+  async function belongs(info: ObserverSessionInfo) {
     if (!info.location?.directory) return false;
     const path = await realpath(info.location.directory);
     if (path === canonical) return true;
@@ -75,10 +105,16 @@ export async function observeOpenCodeSessions(
       } catch {}
     scopeCache.set(path, { value, at: Date.now() });
     if (scopeCache.size > 600)
-      scopeCache.delete(scopeCache.keys().next().value);
+      scopeCache.delete(scopeCache.keys().next().value!);
     return value;
   }
-  const saved = await ctx.storage.get(storageKey).catch(() => null);
+  const saved = (await ctx.storage.get(storageKey).catch(() => null)) as
+    | null
+    | {
+        manual?: unknown;
+        automatic?: [unknown, SessionLink | null, unknown][];
+      }
+    | unknown[];
   const entries = Array.isArray(saved) ? saved : saved?.manual;
   if (Array.isArray(entries))
     for (const entry of entries.slice(-100))
@@ -91,10 +127,10 @@ export async function observeOpenCodeSessions(
           entry[0],
           entry[1].filter((x) => typeof x === 'string'),
         );
-  if (Array.isArray(saved?.automatic))
+  if (saved && !Array.isArray(saved) && Array.isArray(saved.automatic))
     for (const [id, link, issues] of saved.automatic.slice(-500)) {
       if (typeof id === 'string' && typeof link?.issueId === 'string') {
-        remembered.set(id, link);
+        remembered.set(id, link!);
         history.set(
           id,
           Array.isArray(issues)
@@ -108,7 +144,7 @@ export async function observeOpenCodeSessions(
       manual: [...manual],
       automatic: [...remembered]
         .slice(-500)
-        .map(([id, link]) => [id, link, history.get(id) || []]),
+        .map(([id, link]) => [id, { ...link }, history.get(id) || []]),
     };
     const signature = JSON.stringify(value);
     if (signature !== persisted) {
@@ -119,8 +155,8 @@ export async function observeOpenCodeSessions(
   async function update() {
     if (closed || pending) return pending;
     pending = (async () => {
-      const warnings = [];
-      let active = null;
+      const warnings: string[] = [];
+      let active: Activity | null = null;
       try {
         active = data(
           await (ctx.session.active
@@ -131,7 +167,9 @@ export async function observeOpenCodeSessions(
           throw Error('Invalid session.active response');
       } catch (error) {
         active = null;
-        warnings.push('Session activity unavailable: ' + error.message);
+        warnings.push(
+          'Session activity unavailable: ' + (error as Error).message,
+        );
       }
       if (Date.now() - issueAt > 30000) {
         try {
@@ -164,12 +202,17 @@ export async function observeOpenCodeSessions(
           catalogAt = Date.now();
         } catch (error) {
           catalogCursor = undefined;
-          warnings.push('Session discovery unavailable: ' + error.message);
+          warnings.push(
+            'Session discovery unavailable: ' + (error as Error).message,
+          );
         }
       }
-      const sessions = new Map(),
-        failed = new Set();
-      async function load(sessionID) {
+      const sessions = new Map<
+          string,
+          { info: ObserverSessionInfo; messages: SessionMessage[] }
+        >(),
+        failed = new Set<string>();
+      async function load(sessionID: string) {
         if (closed || sessions.has(sessionID) || failed.has(sessionID)) return;
         try {
           const info = data(await ctx.session.get({ sessionID }));
@@ -194,11 +237,13 @@ export async function observeOpenCodeSessions(
           });
           dirty.delete(sessionID);
           if (contextCache.size > 128)
-            contextCache.delete(contextCache.keys().next().value);
+            contextCache.delete(contextCache.keys().next().value!);
           sessions.set(sessionID, { info, messages });
         } catch (error) {
           failed.add(sessionID);
-          warnings.push('Session ' + sessionID + ': ' + error.message);
+          warnings.push(
+            'Session ' + sessionID + ': ' + (error as Error).message,
+          );
         }
       }
       // Active sessions and event IDs bypass the bounded historical queue.
@@ -245,12 +290,13 @@ export async function observeOpenCodeSessions(
           localWarnings.push(
             'Several Beads IDs found; no current task selected automatically',
           );
-        const cached = contextCache.get(sessionID) || {},
+        const cached = contextCache.get(sessionID) || { messages: [] },
           old = records.get(sessionID);
         let diffs = cached.diffs || [];
         if (
           !old ||
-          old.time?.updated !== info.time?.updated ||
+          (old.time as ObserverSessionInfo['time'])?.updated !==
+            info.time?.updated ||
           active?.[sessionID]
         ) {
           diffs = await (
@@ -272,7 +318,7 @@ export async function observeOpenCodeSessions(
           ...sessionView(
             info,
             messages,
-            active?.[sessionID],
+            Boolean(active?.[sessionID]),
             diffs,
             localWarnings,
           ),
@@ -347,10 +393,12 @@ export async function observeOpenCodeSessions(
         }
       } catch (error) {
         if (!closed)
-          console.warn('[beads.observer] Session events: ' + error.message);
+          console.warn(
+            '[beads.observer] Session events: ' + (error as Error).message,
+          );
       }
       if (!closed)
-        await new Promise((resolve) => {
+        await new Promise<void>((resolve) => {
           const done = () => {
             clearTimeout(t);
             controller.signal.removeEventListener('abort', done);
@@ -381,7 +429,7 @@ export async function observeOpenCodeSessions(
       closed = true;
       controller.abort();
       clearInterval(heartbeat);
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       await streamTask;
       await pending?.catch(() => {});
       for (const [id, record] of records)
