@@ -44,6 +44,7 @@ run([
   'coverage/build/test/opencode-session-boundaries.test.js',
   'coverage/build/test/opencode-session-cadence.test.js',
   'coverage/build/test/opencode-session-eviction.test.js',
+  'coverage/build/test/opencode-session-rpc-budget.test.js',
 ]);
 
 interface Counter {

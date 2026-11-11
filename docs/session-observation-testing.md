@@ -42,5 +42,15 @@ Historical rotation covers 260 idle sessions plus an active session: permanent
 range failures survive eviction from the 128-entry context cache, while a new
 user turn or location still retries. The small failure marker lives with the
 existing session record, not in another growing cache or a retry-TTL table.
+The RPC-budget fixture warms seven active and 260 historical sessions, then
+streams tokens for 10 seconds. It allows at most 54 metadata reads (14 active
+and two 20-session historical sweeps), exactly 14 active-context snapshots and
+no diff requests. Known foreign tokens cause no metadata reads, while moved
+sessions and unknown children are discovered immediately. Metadata cache size
+is capped at 600 entries: local info is reused for 5 seconds and negative
+membership for 30 seconds, with lifecycle/move invalidation. Stable idle records
+with an unchanged host revision retain their existing logs and diff without
+reloading an evicted context. Activity outages mark retained records unknown
+without a compensating historical RPC burst.
 They never create sessions or inbox messages in a running host. Module mocking
 uses Node's `--experimental-test-module-mocks` test-only flag.

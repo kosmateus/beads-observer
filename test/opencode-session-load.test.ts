@@ -158,6 +158,7 @@ test('token storms keep seven sessions current without repeating heavy reads; mu
       'running',
     );
     location += '/.';
+    for (const id of ids) await emit('session.moved', id);
     await observer.refresh();
     assert.equal(
       diffs,

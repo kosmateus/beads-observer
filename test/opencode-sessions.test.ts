@@ -106,6 +106,13 @@ test('V2 envelopes without active/diff context methods; independent child, chang
     await observer.refresh();
     records = await readSessionRecords(directory, 'project');
     assert.equal(records[0].status, 'unknown');
+    now += 5000;
+    await observer.refresh();
+    records = await readSessionRecords(directory, 'project');
+    assert.equal(records[0].status, 'unknown');
+    assert.ok(
+      JSON.stringify(records[0]).includes('Session activity unavailable'),
+    );
     const bridge = (await readdir(directory)).find((x) =>
       x.startsWith('bridge-'),
     );
@@ -194,7 +201,9 @@ test('JSON event discovers a child between catalog polls and subscription closes
   assert.equal(aborted, true);
 });
 
-test('discovery follows seven cursor pages with at most four concurrent reads', async () => {
+test('discovery follows seven cursor pages with at most four concurrent reads', async (t) => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
   const directory = await mkdtemp(join(tmpdir(), 'observer-pages-test-'));
   let pages = 0,
     reads = 0,
@@ -245,7 +254,10 @@ test('discovery follows seven cursor pages with at most four concurrent reads', 
     listIssues: async () => ['test-a'],
   });
   try {
-    for (let i = 0; i < 7; i++) await observer.refresh();
+    for (let i = 0; i < 7; i++) {
+      now += 5000;
+      await observer.refresh();
+    }
     assert.equal(pages, 7);
     assert.ok(maxReads <= 4);
     assert.ok(

@@ -88,7 +88,7 @@ test('historical rotation beyond 128 contexts retains permanent diff errors, act
     listIssues: async () => ['test-a'],
   });
   const rotate = async () => {
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 120; i++) {
       now += 1000;
       await observer.refresh();
     }
@@ -104,6 +104,8 @@ test('historical rotation beyond 128 contexts retains permanent diff errors, act
       contexts.get('active')! > 1,
       'active logs keep receiving snapshots',
     );
+    for (const id of targets) await emit(id, 'session.text.delta');
+    await observer.refresh();
     assert.ok(
       contexts.get(targets[0])! > 1,
       'the regression actually evicts and reloads historical context',
@@ -154,6 +156,11 @@ test('historical rotation beyond 128 contexts retains permanent diff errors, act
     await emit(previouslySuccessful, 'session.tool.success');
     await observer.refresh();
     const attempts = calls.get(previouslySuccessful);
+    for (const id of historical.slice(0, 180))
+      await emit(id, 'session.text.delta');
+    await observer.refresh();
+    await emit(previouslySuccessful, 'session.text.delta');
+    await observer.refresh();
     await rotate();
     assert.equal(
       calls.get(previouslySuccessful),
