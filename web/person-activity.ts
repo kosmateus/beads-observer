@@ -1,5 +1,9 @@
 /** Only explicitly attributed audit events and comments; no inferred author/history. */
-export function personActivity(detail, actor) {
+import type { Issue, PersonActivity } from './contracts.js';
+export function personActivity(
+  detail: Issue,
+  actor: string | null,
+): PersonActivity[] {
   return [
     ...(detail.statusEvents || [])
       .filter((event) => event.actor === actor)

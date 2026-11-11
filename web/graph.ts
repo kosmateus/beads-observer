@@ -1,5 +1,6 @@
 /** Pure graph layout: SCC condensation prevents cycles from exploding the layout. */
-export function layoutGraph(issues, edges) {
+import type { Issue, Edge, Position } from './contracts.js';
+export function layoutGraph(issues: Issue[], edges: Edge[]) {
   const nodes = new Map(issues.map((x) => [x.id, x]));
   for (const e of edges)
     for (const id of [e.source, e.target])
@@ -10,32 +11,35 @@ export function layoutGraph(issues, edges) {
           status: 'external',
           issue_type: 'external',
           labels: [],
+          dependencies: [],
         });
-  const adjacency = new Map([...nodes.keys()].map((id) => [id, []]));
-  for (const e of edges) adjacency.get(e.source).push(e.target);
+  const adjacency = new Map<string, string[]>(
+    [...nodes.keys()].map((id) => [id, []]),
+  );
+  for (const e of edges) adjacency.get(e.source)!.push(e.target);
   let counter = 0;
-  const indices = new Map(),
-    low = new Map(),
-    stack = [],
-    onStack = new Set(),
-    components = [];
-  function visit(id) {
+  const indices = new Map<string, number>(),
+    low = new Map<string, number>(),
+    stack: string[] = [],
+    onStack = new Set<string>(),
+    components: string[][] = [];
+  function visit(id: string) {
     indices.set(id, counter);
     low.set(id, counter++);
     stack.push(id);
     onStack.add(id);
-    for (const next of adjacency.get(id)) {
+    for (const next of adjacency.get(id)!) {
       if (!indices.has(next)) {
         visit(next);
-        low.set(id, Math.min(low.get(id), low.get(next)));
+        low.set(id, Math.min(low.get(id)!, low.get(next)!));
       } else if (onStack.has(next))
-        low.set(id, Math.min(low.get(id), indices.get(next)));
+        low.set(id, Math.min(low.get(id)!, indices.get(next)!));
     }
     if (low.get(id) === indices.get(id)) {
       const component = [];
       let member;
       do {
-        member = stack.pop();
+        member = stack.pop()!;
         onStack.delete(member);
         component.push(member);
       } while (member !== id);
@@ -43,14 +47,14 @@ export function layoutGraph(issues, edges) {
     }
   }
   for (const id of nodes.keys()) if (!indices.has(id)) visit(id);
-  const owner = new Map();
+  const owner = new Map<string, number>();
   components.forEach((c, i) => c.forEach((id) => owner.set(id, i)));
-  const dag = components.map(() => new Set()),
+  const dag = components.map(() => new Set<number>()),
     degree = components.map(() => 0),
     rank = components.map(() => 0);
   for (const e of edges) {
-    const a = owner.get(e.source),
-      b = owner.get(e.target);
+    const a = owner.get(e.source)!,
+      b = owner.get(e.target)!;
     if (a !== b && !dag[a].has(b)) {
       dag[a].add(b);
       degree[b]++;
@@ -64,19 +68,19 @@ export function layoutGraph(issues, edges) {
       if (--degree[b] === 0) queue.push(b);
     }
   }
-  const rows = new Map(),
-    positions = new Map();
+  const rows = new Map<number, number>(),
+    positions = new Map<string, Position>();
   [...nodes.values()]
     .sort((a, b) => a.id.localeCompare(b.id))
     .forEach((node) => {
-      const col = rank[owner.get(node.id)],
+      const col = rank[owner.get(node.id)!],
         row = rows.get(col) || 0;
       rows.set(col, row + 1);
       positions.set(node.id, {
         node,
         x: 30 + col * 380,
         y: 120 + row * 280,
-        cycle: components[owner.get(node.id)].length > 1,
+        cycle: components[owner.get(node.id)!].length > 1,
       });
     });
   return {
@@ -89,9 +93,9 @@ export function layoutGraph(issues, edges) {
 
 /** Filter actual nodes and edges; never invent aggregate epic dependencies. */
 export function graphSelection(
-  rows,
-  issues,
-  edges,
+  rows: Issue[],
+  issues: Issue[],
+  edges: Edge[],
   mode = 'all',
   edgeMode = 'blocking',
   context = true,
@@ -143,7 +147,7 @@ export function graphSelection(
 }
 
 /** Derived display state; readiness is authoritative Beads data, never inferred from open. */
-export function stageSummary(nodes, stale = false) {
+export function stageSummary(nodes: Issue[], stale = false) {
   const items = nodes.filter((x) => !x.graphContext);
   const total = items.length,
     closed = items.filter((x) => x.status === 'closed').length;

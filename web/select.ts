@@ -2,10 +2,14 @@ import { t } from './i18n.js';
 import { typeIcon, typeHue } from './types.js';
 import { priorityIcon, priorityLabel, validPriority } from './priority.js';
 import { flagImages } from './flags.js';
+interface Control {
+  select: HTMLSelectElement;
+  button: HTMLButtonElement;
+}
 /** Progressive enhancement: native selects retain values; one portal owns interaction. */
 export function initSelects() {
-  const controls = new Map();
-  let active = null,
+  const controls = new Map<HTMLSelectElement, Control>();
+  let active: Control | null = null,
     cursor = 0,
     prefix = '',
     lastKey = 0;
@@ -24,12 +28,13 @@ export function initSelects() {
     ['create-parent', 'relation-issue', 'relation-target'].includes(
       active.select.id,
     );
-  const matches = (option) =>
+  const matches = (option: HTMLOptionElement) =>
     !query ||
     `${option.textContent} ${option.value} ${option.dataset.issueType || ''}`
       .toLocaleLowerCase()
       .includes(query.toLocaleLowerCase());
   search.addEventListener('input', () => {
+    if (!active) return;
     query = search.value;
     cursor = [...active.select.options].findIndex(
       (o) => !o.disabled && matches(o),
@@ -38,6 +43,7 @@ export function initSelects() {
     search.focus();
   });
   search.addEventListener('keydown', (event) => {
+    if (!active) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
@@ -67,13 +73,21 @@ export function initSelects() {
       }
     }
   });
-  function label(element, text, select, value) {
+  function label(
+    element: HTMLElement,
+    text: string,
+    select: HTMLSelectElement,
+    value: string,
+  ) {
     element.replaceChildren();
     const item = [...select.options].find((option) => option.value === value);
     if (item?.dataset.issueId) {
       const badge = document.createElement('span');
       badge.className = 'issue-id-badge';
-      badge.style.setProperty('--type-hue', typeHue(item.dataset.issueType));
+      badge.style.setProperty(
+        '--type-hue',
+        String(typeHue(item.dataset.issueType)),
+      );
       badge.innerHTML = typeIcon(item.dataset.issueType);
       badge.append(document.createTextNode(item.dataset.issueId));
       const title = document.createElement('span');
@@ -107,16 +121,18 @@ export function initSelects() {
     }
     if (select.id === 'language' && value !== 'system') {
       const country =
-        {
-          cs: 'cz',
-          da: 'dk',
-          el: 'gr',
-          en: 'gb',
-          et: 'ee',
-          ga: 'ie',
-          sl: 'si',
-          sv: 'se',
-        }[value] || value;
+        (
+          {
+            cs: 'cz',
+            da: 'dk',
+            el: 'gr',
+            en: 'gb',
+            et: 'ee',
+            ga: 'ie',
+            sl: 'si',
+            sv: 'se',
+          } as Record<string, string>
+        )[value] || value;
       if (flagImages[country]) {
         const image = document.createElement('img');
         image.src = flagImages[country];
@@ -164,7 +180,11 @@ export function initSelects() {
       search.setAttribute('aria-label', t('search'));
       popup.append(search);
     }
-    popup.setAttribute('aria-label', active.button.getAttribute('aria-label'));
+    popup.setAttribute(
+      'aria-label',
+      active.button.getAttribute('aria-label') || '',
+    );
+    const control = active;
     Array.from(active.select.options).forEach((option, i) => {
       if (searchable() && !matches(option)) return;
       const row = document.createElement('div');
@@ -174,8 +194,8 @@ export function initSelects() {
       row.setAttribute('aria-selected', String(option.selected));
       row.setAttribute('aria-disabled', String(option.disabled));
       row.classList.toggle('focused', i === cursor);
-      label(row, option.textContent, active.select, option.value);
-      row.dataset.index = i;
+      label(row, option.textContent || '', control.select, option.value);
+      row.dataset.index = String(i);
       row.addEventListener('mousedown', (e) => e.preventDefault());
       row.addEventListener('click', () => choose(i));
       popup.append(row);
@@ -195,7 +215,7 @@ export function initSelects() {
     }
     position();
   }
-  function choose(index) {
+  function choose(index: number) {
     if (
       !active ||
       !active.select.options[index] ||
@@ -208,7 +228,7 @@ export function initSelects() {
     select.dispatchEvent(new Event('change', { bubbles: true }));
     sync();
   }
-  function open(control) {
+  function open(control: Control) {
     close();
     active = control;
     query = '';
@@ -245,7 +265,7 @@ export function initSelects() {
         control = { select, button };
         controls.set(select, control);
         button.addEventListener('click', () =>
-          active === control ? close() : open(control),
+          active === control ? close() : open(control!),
         );
         button.addEventListener('keydown', (e) => {
           if (e.key === 'Tab') {
@@ -266,7 +286,7 @@ export function initSelects() {
           ) {
             e.preventDefault();
             if (!active || active !== control) {
-              open(control);
+              open(control!);
               return;
             }
             if (e.key === 'Enter' || e.key === ' ') return choose(cursor);
@@ -279,7 +299,7 @@ export function initSelects() {
               e.key === 'Home'
                 ? enabled[0]
                 : e.key === 'End'
-                  ? enabled.at(-1)
+                  ? enabled.at(-1)!
                   : enabled[
                       (at + (e.key === 'ArrowDown' ? 1 : -1) + enabled.length) %
                         enabled.length
@@ -292,13 +312,13 @@ export function initSelects() {
             !e.altKey
           ) {
             e.preventDefault();
-            if (active !== control) open(control);
+            if (active !== control) open(control!);
             prefix = Date.now() - lastKey > 700 ? e.key : prefix + e.key;
             lastKey = Date.now();
             const i = Array.from(select.options).findIndex(
               (o) =>
                 !o.disabled &&
-                o.textContent
+                (o.textContent || '')
                   .trim()
                   .toLocaleLowerCase()
                   .startsWith(prefix.toLocaleLowerCase()),
@@ -321,23 +341,27 @@ export function initSelects() {
       control.button.setAttribute(
         'aria-label',
         select.getAttribute('aria-label') ||
-          select.labels?.[0]?.textContent.trim() ||
+          select.labels?.[0]?.textContent?.trim() ||
           select.id,
       );
-      control.button.title = control.button.textContent;
+      control.button.title = control.button.textContent || '';
     });
     if (active) paint();
   }
   document.addEventListener('pointerdown', (e) => {
     if (
       active &&
-      !popup.contains(e.target) &&
-      !active.button.contains(e.target)
+      !popup.contains(e.target instanceof Node ? e.target : null) &&
+      !active.button.contains(e.target instanceof Node ? e.target : null)
     )
       close();
   });
   document.addEventListener('focusin', (e) => {
-    if (active && e.target !== active.button && !popup.contains(e.target))
+    if (
+      active &&
+      e.target !== active.button &&
+      !popup.contains(e.target instanceof Node ? e.target : null)
+    )
       close();
   });
   window.addEventListener('resize', position);
@@ -352,11 +376,11 @@ export function initSelects() {
     if (
       records.some(
         (r) =>
-          r.target.closest?.('select') ||
+          (r.target instanceof Element && r.target.closest('select')) ||
           Array.from(r.addedNodes).some(
             (n) =>
-              n.nodeType === 1 &&
-              (n.matches?.('select') || n.querySelector?.('select')),
+              n instanceof Element &&
+              (n.matches('select') || n.querySelector('select')),
           ),
       )
     )

@@ -7,7 +7,7 @@ const priorityPaths = [
   'M5 7 10 12 15 7',
   'M5 4 10 9 15 4 M5 9 10 14 15 9',
 ];
-export function validPriority(value) {
+export function validPriority(value: unknown) {
   return (
     value !== null &&
     value !== undefined &&
@@ -17,22 +17,22 @@ export function validPriority(value) {
     Number(value) <= 4
   );
 }
-export function priorityLabel(value) {
+export function priorityLabel(value: unknown) {
   return validPriority(value)
     ? `P${Number(value)} · ${t(priorityKeys[Number(value)])}`
     : t('unknown');
 }
-export function priorityIcon(value) {
+export function priorityIcon(value: unknown) {
   if (!validPriority(value)) return '';
   return `<svg class="priority-icon priority-${Number(value)}" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="${priorityPaths[Number(value)]}" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
-export function priorityMarkup(value) {
+export function priorityMarkup(value: unknown) {
   if (!validPriority(value)) return '<span class="muted">—</span>';
   const label = priorityLabel(value).replace(
     /[&<>"']/g,
     (c) =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[
-        c
+        c as '&' | '<' | '>' | '"' | "'"
       ],
   );
   return `<span class="priority-badge" title="${label}" aria-label="${label}">${priorityIcon(value)}<span>P${Number(value)}</span></span>`;

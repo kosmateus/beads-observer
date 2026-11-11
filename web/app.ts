@@ -14,35 +14,97 @@ import {
 } from './epics.js';
 import { t, locale, dateTime, initLanguage } from './i18n.js';
 import { layoutGraph, graphSelection, stageSummary } from './graph.js';
-const $ = (id) => document.getElementById(id);
-const esc = (value) =>
+import type {
+  Issue,
+  Edge,
+  Snapshot,
+  Activity,
+  Project,
+  PersonActivity,
+  Session,
+  SessionResult,
+  ProjectView,
+  EpicView,
+  Position,
+  Capabilities,
+  MutationResult,
+} from './contracts.js';
+import { byId, query } from './dom.js';
+type SelectId =
+  | 'theme'
+  | 'epic'
+  | 'epic-sort'
+  | 'history-order'
+  | 'assignee'
+  | 'priority'
+  | 'type'
+  | 'label'
+  | 'sort'
+  | 'group'
+  | 'graph-mode'
+  | 'edge-mode'
+  | 'list-mode'
+  | 'relation-type'
+  | 'create-type'
+  | 'create-priority'
+  | 'create-parent'
+  | 'project-select'
+  | 'relation-issue'
+  | 'relation-target';
+type InputId = 'search' | 'graph-context' | 'create-title';
+type ButtonId =
+  | 'new-issue'
+  | 'reset-project'
+  | 'submit-create'
+  | 'cancel-create'
+  | 'submit-relation'
+  | 'cancel-relation';
+type AppElement<K extends string> = K extends SelectId
+  ? HTMLSelectElement
+  : K extends InputId
+    ? HTMLInputElement
+    : K extends ButtonId
+      ? HTMLButtonElement
+      : K extends 'create-form' | 'relation-form'
+        ? HTMLFormElement
+        : K extends 'create-dialog' | 'relation-dialog'
+          ? HTMLDialogElement
+          : K extends 'create-description'
+            ? HTMLTextAreaElement
+            : HTMLElement;
+const $ = <K extends string>(id: K): AppElement<K> => byId(id) as AppElement<K>;
+const esc = (value: unknown) =>
   String(value ?? '').replace(
     /[&<>"']/g,
     (x) =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[
-        x
+        x as '&' | '<' | '>' | '"' | "'"
       ],
   );
 function skeleton(kind = 'detail', count = 4) {
   return `<div class="loading-skeleton skeleton-${kind}" role="status" aria-label="${esc(t('loading'))}" aria-busy="true"><span class="sr-only">${t('loading')}</span>${Array.from({ length: count }, () => '<div class="skeleton-block" aria-hidden="true"><i></i><i></i><i></i></div>').join('')}</div>`;
 }
-const names = new Proxy({}, { get: (_, key) => valueLabel('status', key) });
-let liveAgentActivity = {},
-  presenceTimer;
-let activeAgent = null,
+const names = new Proxy<Record<string, string>>(
+  {},
+  { get: (_, key) => valueLabel('status', key) },
+);
+let liveAgentActivity: Record<string, Pick<Session, 'sessionID' | 'agent'>[]> =
+    {},
+  presenceTimer: ReturnType<typeof setTimeout>;
+let activeAgent: string | null = null,
   agentLoad = 0,
-  agentRows = [],
+  agentRows: PersonActivity[] = [],
   agentDone = 0,
   agentTotal = 0,
   agentFailures = 0,
   agentLoading = false;
-let epicDetails = null,
+let epicDetails: Partial<Issue> | null = null,
   epicLoad = 0;
-let activeEpicId = null,
+let activeEpicId: string | null = null,
   epicSearch = '',
   epicSort = 'priority',
   epicSortDirection = 'asc';
-function navigateTo(kind = view, id, replace = false) {
+function navigateTo(kind = view, id?: string | null, replace = false) {
   if (!activeProjectId) return;
   const url = new URL(location.href);
   url.pathname = routePath(activeProjectId, kind, id);
@@ -65,11 +127,11 @@ function applyRoute() {
   else if (route.issue) openDetail(route.issue, false, true, false, true);
   else setView(route.view || view, false);
 }
-function toggleEpicPage(show) {
-  document.querySelector('main').classList.toggle('show-epic', show);
+function toggleEpicPage(show: boolean) {
+  query(document, 'main').classList.toggle('show-epic', show);
   $('epic-page').hidden = !show;
 }
-function openEpic(id, navigate = true) {
+function openEpic(id: string, navigate = true) {
   closeAgentPage(false);
   if (activeEpicId !== id) {
     epicDetails = null;
@@ -121,7 +183,10 @@ async function refreshEpicDetails() {
       id === activeEpicId &&
       project === activeProjectId
     ) {
-      epicDetails = { statusEventsWarning: error.message };
+      epicDetails = {
+        statusEventsWarning:
+          error instanceof Error ? error.message : String(error),
+      };
       if ($('detail').hidden) renderEpic();
     }
   }
@@ -149,20 +214,21 @@ function renderEpic() {
   $('epic-page').innerHTML =
     `<div class="detail-top"><button id="epic-back">← ${t(view)}</button>${issueBreadcrumbs(epic)}</div><div class="epic-detail-body"></div>`;
   mountIssueDetails(
-    $('epic-page').querySelector('.epic-detail-body'),
+    query($('epic-page'), '.epic-detail-body'),
     detail,
     relations,
   );
   if (!epicDetails)
-    $('epic-page')
-      .querySelector('.epic-detail-body')
-      .insertAdjacentHTML('beforeend', skeleton('activity', 2));
-  const heading = $('epic-page').querySelector('h2');
+    query($('epic-page'), '.epic-detail-body').insertAdjacentHTML(
+      'beforeend',
+      skeleton('activity', 2),
+    );
+  const heading = query($('epic-page'), 'h2');
   heading.id = 'epic-heading';
   heading.tabIndex = -1;
   $('epic-back').onclick = () => closeEpic();
 }
-function issueChildrenContent(epic) {
+function issueChildrenContent(epic: Issue) {
   const children = epicChildren(epic.id, data.issues, data.edges),
     done = children.filter((x) => x.status === 'closed').length;
   const rows = children
@@ -179,61 +245,64 @@ function issueChildrenContent(epic) {
 }
 let refreshIssueDetails = () => {};
 /** One detail component mounted into either the page or drawer shell. */
-function mountIssueDetails(root, issue, relations) {
-  let closeSessionPanel;
+function mountIssueDetails(root: HTMLElement, issue: Issue, relations: Edge[]) {
+  let closeSessionPanel: (() => void) | undefined;
   function renderComponent() {
     const focused =
       root.querySelector('#epic-search') === document.activeElement;
-    const position = focused ? document.activeElement.selectionStart : null;
+    const position =
+      focused && document.activeElement instanceof HTMLInputElement
+        ? document.activeElement.selectionStart
+        : null;
     closeSessionPanel?.();
     root.innerHTML = issuePageContent(issue, relations);
-    const layout = root.querySelector('.issue-layout');
+    const layout = root.querySelector<HTMLElement>('.issue-layout');
     const children =
-      layout?.querySelector('.epic-child-section') ||
-      layout?.querySelector('.issue-activity-section');
-    if (children) {
+      layout?.querySelector<HTMLElement>('.epic-child-section') ||
+      layout?.querySelector<HTMLElement>('.issue-activity-section');
+    if (children && layout) {
       const lower = document.createElement('div');
       lower.className = 'issue-lower';
-      let section = children;
+      let section: Element | null = children;
       while (section) {
-        const next = section.nextElementSibling;
+        const next: Element | null = section.nextElementSibling;
         lower.append(section);
         section = next;
       }
       layout.after(lower);
     }
-    const logs = root.querySelector('#issue-pane-sessions');
+    const logs = root.querySelector<HTMLElement>('#issue-pane-sessions');
     closeSessionPanel = mountSessionPanel(logs, {
       issueId: issue.id,
       url: projectURL('sessions'),
       t,
       skeleton,
     });
-    const search = root.querySelector('#epic-search');
+    const search = root.querySelector<HTMLInputElement>('#epic-search');
     if (search)
-      search.oninput = (event) => {
-        epicSearch = event.target.value;
+      search.oninput = () => {
+        epicSearch = search.value;
         renderComponent();
       };
-    const sort = root.querySelector('#epic-sort');
+    const sort = root.querySelector<HTMLSelectElement>('#epic-sort');
     if (sort)
-      sort.onchange = (event) => {
-        epicSort = event.target.value;
+      sort.onchange = () => {
+        epicSort = sort.value;
         epicSortDirection = 'asc';
         renderComponent();
       };
-    const create = root.querySelector('#epic-create');
+    const create = root.querySelector<HTMLButtonElement>('#epic-create');
     if (create) create.onclick = () => newIssue(issue.id);
-    const graph = root.querySelector('#epic-graph');
+    const graph = root.querySelector<HTMLButtonElement>('#epic-graph');
     if (graph)
       graph.onclick = () => {
         $('epic').value = issue.id;
         setView('graph');
       };
-    const order = root.querySelector('#history-order');
+    const order = root.querySelector<HTMLSelectElement>('#history-order');
     if (order)
-      order.onchange = (event) => {
-        historyOrder = event.target.value;
+      order.onchange = () => {
+        historyOrder = order.value;
         storage.set('beads-history-order', historyOrder);
         renderComponent();
       };
@@ -247,7 +316,7 @@ function mountIssueDetails(root, issue, relations) {
   renderComponent();
 }
 
-let data = {
+let data: Snapshot = {
     issues: [],
     edges: [],
     activity: [],
@@ -257,34 +326,41 @@ let data = {
   view = 'board',
   onlyReady = false,
   onlyBlocked = false,
-  selectedID = null,
+  selectedID: string | null = null,
   detailVersion = 0,
   zoom = 1,
   edgeMode = 'blocking',
   graphMode = 'all',
   listMode = 'all',
   graphContext = false,
-  changed = new Set();
+  changed = new Set<string>();
 const storage = {
-  get(k) {
+  get(k: string) {
     try {
       return localStorage.getItem(k);
     } catch {
       return null;
     }
   },
-  set(k, v) {
+  set(k: string, v: string) {
     try {
       localStorage.setItem(k, v);
     } catch {}
   },
 };
-let activeProjectId = null,
-  projectCatalog = [],
-  projectStream = null,
+let activeProjectId: string | null = null,
+  projectCatalog: Project[] = [],
+  projectStream: EventSource | null = null,
   projectEpoch = 0;
-const detailRequests = new Map();
-function fetchIssue(id, force = false, activityOnly = false) {
+const detailRequests = new Map<
+  string,
+  { at: number; request: Promise<Issue> }
+>();
+function fetchIssue(
+  id: string,
+  force = false,
+  activityOnly = false,
+): Promise<Issue> {
   const key = JSON.stringify([
     activeProjectId,
     data.revision,
@@ -297,7 +373,7 @@ function fetchIssue(id, force = false, activityOnly = false) {
     projectURL('issues/' + encodeURIComponent(id)) +
       (activityOnly ? '?activity=1' : ''),
   ).then(async (response) => {
-    const result = await response.json();
+    const result: Issue & { error?: string } = await response.json();
     if (!response.ok) throw Error(result.error || t('readError'));
     return result;
   });
@@ -307,16 +383,16 @@ function fetchIssue(id, force = false, activityOnly = false) {
     if (detailRequests.get(key) === entry) detailRequests.delete(key);
   });
   if (detailRequests.size > 250)
-    detailRequests.delete(detailRequests.keys().next().value);
+    detailRequests.delete(detailRequests.keys().next().value!);
   return request;
 }
-function storedMap(key) {
+function storedMap<T>(key: string): Map<string, T> {
   try {
-    const value = JSON.parse(storage.get(key) || '[]');
+    const value: unknown = JSON.parse(storage.get(key) || '[]');
     return new Map(
       Array.isArray(value)
         ? value.filter(
-            (item) =>
+            (item: unknown): item is [string, T] =>
               Array.isArray(item) &&
               typeof item[0] === 'string' &&
               item[1] &&
@@ -328,8 +404,8 @@ function storedMap(key) {
     return new Map();
   }
 }
-const projectViews = storedMap('beads-project-views-v1');
-const epicViews = storedMap('beads-epic-views-v1');
+const projectViews = storedMap<ProjectView>('beads-project-views-v1');
+const epicViews = storedMap<EpicView>('beads-epic-views-v1');
 let listSort = { key: 'priority', direction: 'asc' };
 function persistEpicView() {
   if (!activeProjectId || !activeEpicId) return;
@@ -340,8 +416,8 @@ function persistEpicView() {
   });
   storage.set('beads-epic-views-v1', JSON.stringify([...epicViews]));
 }
-function compareIssues(a, b, key, direction) {
-  const read = (x) =>
+function compareIssues(a: Issue, b: Issue, key: string, direction: string) {
+  const read = (x: Issue) =>
     key === 'epic'
       ? epics(x.id)
           .map((e) => e.title)
@@ -352,7 +428,7 @@ function compareIssues(a, b, key, direction) {
           ? names[x.status] || x.status
           : key === 'priority'
             ? (x.priority ?? 99)
-            : x[key] || '';
+            : x[key as keyof Issue] || '';
   const av = read(a),
     bv = read(b);
   const order =
@@ -361,7 +437,7 @@ function compareIssues(a, b, key, direction) {
       : String(av).localeCompare(String(bv), locale(), { numeric: true });
   return (direction === 'desc' ? -1 : 1) * order || a.id.localeCompare(b.id);
 }
-function sortHeader(key, label, scope = 'list') {
+function sortHeader(key: string, label: string, scope = 'list') {
   const current =
     scope === 'epic'
       ? { key: epicSort, direction: epicSortDirection }
@@ -370,9 +446,12 @@ function sortHeader(key, label, scope = 'list') {
   return `<th aria-sort="${active ? (current.direction === 'desc' ? 'descending' : 'ascending') : 'none'}"><button class="column-sort" data-column-sort="${key}" data-sort-scope="${scope}">${esc(label)}<span aria-hidden="true">${active ? (current.direction === 'desc' ? '↓' : '↑') : '↕'}</span></button></th>`;
 }
 document.addEventListener('click', (event) => {
-  const button = event.target.closest('[data-column-sort]');
+  const button =
+    event.target instanceof Element
+      ? event.target.closest<HTMLElement>('[data-column-sort]')
+      : null;
   if (!button) return;
-  const key = button.dataset.columnSort;
+  const key = button.dataset.columnSort!;
   if (button.dataset.sortScope === 'epic') {
     epicSortDirection =
       epicSort === key && epicSortDirection === 'asc' ? 'desc' : 'asc';
@@ -396,8 +475,8 @@ const filterIDs = [
   'epic',
   'sort',
   'group',
-];
-function emptyProject(name = 'Beads') {
+] as const;
+function emptyProject(name = 'Beads'): Snapshot {
   return {
     issues: [],
     edges: [],
@@ -409,7 +488,7 @@ function emptyProject(name = 'Beads') {
     updatedAt: null,
   };
 }
-function projectURL(suffix) {
+function projectURL(suffix: string) {
   if (!activeProjectId) throw new Error('No active project');
   return `/api/projects/${encodeURIComponent(activeProjectId)}/${suffix}`;
 }
@@ -427,7 +506,7 @@ function theme() {
 $('theme').onchange = theme;
 media.addEventListener('change', theme);
 theme();
-function populate(id, values, label) {
+function populate(id: SelectId, values: (string | undefined)[], label: string) {
   const current = $(id).value;
   $(id).innerHTML =
     `<option value="">${label}</option>` +
@@ -440,13 +519,13 @@ function populate(id, values, label) {
       .join('');
   $(id).value = current;
 }
-function epics(id) {
+function epics(id: string) {
   return epicAncestors(id, data.issues, data.edges);
 }
-function parent(id) {
+function parent(id: string) {
   return epics(id)[0]?.id;
 }
-function epicBadge(x) {
+function epicBadge(x: Pick<Issue, 'id' | 'issue_type'>) {
   const ancestors = epics(x.id);
   if (!ancestors.length)
     return x.issue_type === 'epic'
@@ -487,7 +566,7 @@ function filtered() {
           : (a.priority ?? 4) - (b.priority ?? 4) || a.id.localeCompare(b.id),
     );
 }
-function agentPortrait(actor) {
+function agentPortrait(actor: string | undefined | null) {
   if (!actor)
     return `<svg class="unassigned-icon" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="12" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>`;
   // Stable pseudorandom appearance: the same agent keeps its portrait in every project/view.
@@ -499,11 +578,11 @@ function agentPortrait(actor) {
     antenna = 9 + ((seed >>> 8) % 15);
   return `<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="10" fill="hsl(${hue} 55% 32%)"/><path d="M${antenna} 10V5" stroke="hsl(${hue} 80% 82%)" stroke-width="2"/><circle cx="${antenna}" cy="5" r="2" fill="hsl(${(hue + 60) % 360} 90% 72%)"/><rect x="5" y="10" width="22" height="18" rx="${5 + (seed % 4)}" fill="hsl(${hue} 65% 82%)"/><circle cx="11" cy="18" r="${eye}" fill="#182038"/><circle cx="21" cy="18" r="${eye}" fill="#182038"/><path d="M12 24h8" stroke="#182038" stroke-width="2" stroke-linecap="round"/></svg>`;
 }
-function avatar(x) {
+function avatar(x: { id?: string; assignee?: string }) {
   return `<span class="agent-identity"><span class="avatar agent-avatar" title="${esc(x.assignee || t('unassigned'))}" data-agent="${esc(x.assignee || '')}" data-issue-agent="${esc(x.id || '')}" ${x.assignee ? 'role="button" tabindex="0"' : ''}>${agentPortrait(x.assignee)}</span><span class="agent-name">${esc(x.assignee?.replace('agent/', '') || t('unassigned'))}</span></span>`;
 }
-function statusBadge(status) {
-  const hues = {
+function statusBadge(status: string) {
+  const hues: Record<string, number> = {
     open: 215,
     in_progress: 265,
     blocked: 350,
@@ -518,17 +597,20 @@ function statusBadge(status) {
   const hue = hues[status] ?? hash % 360;
   return `<span class="status" data-status="${esc(status || 'unknown')}" style="--status-hue:${hue}">${esc(names[status] || status || t('unknown'))}</span>`;
 }
-function typeBadge(x) {
+function typeBadge(x: Pick<Issue, 'issue_type'>) {
   return `<span class="issue-type" style="--type-hue:${typeHue(x.issue_type)}">${typeIcon(x.issue_type)} ${esc(valueLabel('type', x.issue_type))}</span>`;
 }
-function relationLabel(type) {
+function relationLabel(type: string) {
   return valueLabel('relation', type);
 }
-function issueLink(x, current = false) {
+function issueLink(x: { id: string; issue_type?: string }, current = false) {
   x = { ...data.issues.find((item) => item.id === x.id), ...x };
   return `<a class="issue-id-link" style="--type-hue:${typeHue(x.issue_type)}" ${current ? 'id="detail-id" aria-current="page"' : ''} data-detail="${esc(x.id)}" href="${routePath(activeProjectId, 'issues', x.id)}" title="${esc(valueLabel('type', x.issue_type))}">${typeIcon(x.issue_type)}<span>${esc(x.id)}</span></a>`;
 }
-function issueBreadcrumbs(x, detail = false) {
+function issueBreadcrumbs(
+  x: { id: string; issue_type?: string },
+  detail = false,
+) {
   const paths = hierarchyPaths(x.id, data.edges);
   return `<nav class="issue-breadcrumbs" aria-label="${esc(t('parentIssue'))}">${paths
     .map(
@@ -548,15 +630,15 @@ function issueBreadcrumbs(x, detail = false) {
     )
     .join('')}</nav>`;
 }
-function childSection(x) {
+function childSection(x: Issue) {
   return issueChildrenContent(x);
 }
-function card(x, graph = false) {
+function card(x: Issue, graph = false) {
   return `<article class="issue ${graph ? 'graph-node' : ''} ${x.graphContext ? 'graph-context' : ''} ${changed.has(x.id) ? 'changed' : ''}" style="--type-hue:${typeHue(x.issue_type)}" data-issue="${esc(x.id)}" tabindex="0" aria-label="${esc(x.id + ' ' + x.title)}"><div class="issue-title">${esc(x.status === 'external' ? t('external') : x.title)}</div>${epicBadge(x)}<div class="issue-footer">${issueLink(x)}<span class="card-people">${priorityMarkup(x.priority)}${avatar(x)}</span></div>${graph ? `<div class="graph-status">${statusBadge(x.status)}${x.blocked ? `<span class="blocker-note">⊘ ${t('blocked')}</span>` : ''}</div>${x.graphContext ? `<small class="graph-context-label">${t('graphContextLabel')}</small>` : ''}` : ''}</article>`;
 }
-function renderBoard(rows) {
+function renderBoard(rows: Issue[]) {
   const group = $('group').value,
-    groups = new Map();
+    groups = new Map<string, Issue[]>();
   for (const x of rows) {
     const key =
       group === 'assignee'
@@ -565,7 +647,7 @@ function renderBoard(rows) {
           ? (x.issue_type === 'epic' ? x.id : parent(x.id)) || t('noEpic')
           : '';
     if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(x);
+    groups.get(key)!.push(x);
   }
   if (!rows.length) groups.set('', []);
   return [...groups]
@@ -588,7 +670,7 @@ function renderBoard(rows) {
     )
     .join('');
 }
-function typeFilterOptions(selected) {
+function typeFilterOptions(selected: string) {
   const types = [
     ...new Set([
       'task',
@@ -613,7 +695,7 @@ function typeFilterOptions(selected) {
       .join('')
   );
 }
-function stageHeader(index, positions) {
+function stageHeader(index: number, positions: Position[]) {
   const summary = stageSummary(
     positions.filter((p) => p.x === 30 + index * 380).map((p) => p.node),
     !!data.error,
@@ -626,10 +708,10 @@ function stageHeader(index, positions) {
     deferred: 'stageDeferred',
     open: 'stageOpen',
     incomplete: 'stageIncomplete',
-  }[summary.status];
+  }[summary.status]!;
   return `<span class="stage-heading">${t('stage')} ${String(index + 1).padStart(2, '0')} <span class="stage-status stage-${summary.status}">${t(label)}</span></span><span class="stage-progress">${summary.closed}/${summary.total} ${t('closed')} · ${summary.running} ${t('inProgress')} · ${summary.blocked} ${t('blocked')}</span>`;
 }
-function renderGraph(rows) {
+function renderGraph(rows: Issue[]) {
   const selection = graphSelection(
     rows,
     data.issues,
@@ -643,8 +725,8 @@ function renderGraph(rows) {
   const positioned = [...layout.positions.values()];
   return `<div class="graph-controls"><select id="graph-mode" aria-label="${t('type')}">${typeFilterOptions(graphMode)}</select><label class="graph-context-toggle"><input type="checkbox" id="graph-context" ${graphContext ? 'checked' : ''}>${t('showGraphContext')}</label><span>${t('dependencyDirection')}</span><select id="edge-mode" aria-label="${t('relations')}"><option value="blocking" ${edgeMode === 'blocking' ? 'selected' : ''}>${t('execution')}</option><option value="all" ${edgeMode === 'all' ? 'selected' : ''}>${t('allRelations')}</option></select><button id="zoom-out" aria-label="${t('zoomOut')}">−</button><span>${Math.round(zoom * 100)}%</span><button id="zoom-in" aria-label="${t('zoomIn')}">+</button><button id="zoom-reset">100%</button><span class="graph-legend">${[...new Set(edges.map((e) => e.type))].map((type) => `<span class="relation-key"><i class="${type === 'blocks' ? '' : 'dashed'}"></i>${esc(relationLabel(type))}</span>`).join(' ')}${selection.hiddenEdges ? ` · ${t('hiddenRelations')}: ${selection.hiddenEdges}` : ''}</span></div><div class="graph-direction-help"><span class="cleared-path-key">${t('clearedDependency')}</span><span class="waiting-path-key">${t('waitingDependency')}</span><span>━━ ${t('blockerDirection')}</span><span>┄┄ ${t('hierarchyDirection')}</span></div><div class="graph-scroll"><div style="width:${layout.width * zoom}px;height:${layout.height * zoom}px"><div class="graph-canvas" style="width:${layout.width}px;height:${layout.height}px;transform:scale(${zoom})"><svg width="${layout.width}" height="${layout.height}" aria-label="${t('dependencies')}"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted)"/></marker><marker id="arrow-cleared" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--green)"/></marker></defs>${edges
     .map((e) => {
-      const a = layout.positions.get(e.source),
-        b = layout.positions.get(e.target),
+      const a = layout.positions.get(e.source)!,
+        b = layout.positions.get(e.target)!,
         x = a.x + 260,
         y = a.y + 58,
         tx = b.x,
@@ -657,7 +739,7 @@ function renderGraph(rows) {
       '',
     )}</svg>${Array.from({ length: layout.columns }, (_, i) => `<span class="graph-stage" style="left:${30 + i * 380}px">${stageHeader(i, positioned)}</span>`).join('')}${positioned.map((p) => `<div style="position:absolute;left:${p.x}px;top:${p.y}px">${card(p.node, true)}${p.cycle ? `<span class="tag">${t('cycle')}</span>` : ''}</div>`).join('')}</div></div></div>`;
 }
-function renderList(rows) {
+function renderList(rows: Issue[]) {
   const options = `<div class="list-controls"><label>${t('type')} <select id="list-mode">${typeFilterOptions(listMode)}</select></label></div>`;
   rows = [...rows].sort((a, b) =>
     compareIssues(a, b, listSort.key, listSort.direction),
@@ -665,8 +747,8 @@ function renderList(rows) {
   const visible = rows.filter(
     (x) => listMode === 'all' || x.issue_type === listMode,
   );
-  const ordered = [],
-    seen = new Set(),
+  const ordered: { x: Issue; depth: number }[] = [],
+    seen = new Set<string>(),
     included = new Map(visible.map((x) => [x.id, x]));
   // Preserve the real hierarchy for every type; never infer parenthood from IDs.
   if (listMode === 'all') {
@@ -677,7 +759,7 @@ function renderList(rows) {
           if (ancestor) included.set(id, ancestor);
         }
   }
-  const parent = new Map();
+  const parent = new Map<string, string>();
   if (listMode === 'all')
     for (const x of included.values()) {
       const relation = data.edges.find(
@@ -688,7 +770,7 @@ function renderList(rows) {
       );
       if (relation) parent.set(x.id, relation.source);
     }
-  const visit = (x, depth) => {
+  const visit = (x: Issue, depth: number) => {
     if (seen.has(x.id)) return;
     seen.add(x.id);
     ordered.push({ x, depth });
@@ -727,7 +809,7 @@ function renderList(rows) {
     '</div>'
   );
 }
-function renderActivity(rows) {
+function renderActivity(rows: Issue[]) {
   const ids = new Set(rows.map((x) => x.id));
   const events = data.activity.filter((x) => ids.has(x.id));
   return events.length
@@ -737,19 +819,19 @@ function renderActivity(rows) {
 const syncSelects = initSelects();
 function render() {
   if (data.revision) saveProjectView();
-  $('sort').closest('label').hidden = view === 'list';
+  $('sort').closest('label')!.hidden = view === 'list';
   $('view-title').textContent = t(view);
   if (activeEpicId && $('detail').hidden) renderEpic();
   if (
     activeAgent ||
     activeEpicId ||
-    document.querySelector('main').classList.contains('show-issue')
+    query(document, 'main').classList.contains('show-issue')
   )
     return;
   const rows = filtered();
   $('result-count').textContent =
     `${rows.length} ${t('of')} ${data.issues.length} · ${t('issues')}`;
-  $('activity-count').textContent = data.activity.length;
+  $('activity-count').textContent = String(data.activity.length);
   $('footer-count').textContent =
     `${t('relations')}: ${data.edges.length} · ${t('revision')}: ${data.revision}`;
   const scroll =
@@ -783,57 +865,59 @@ function render() {
     },
   );
   if ($('list-mode'))
-    $('list-mode').onchange = (e) => {
-      listMode = e.target.value;
+    $('list-mode').onchange = () => {
+      listMode = $('list-mode').value;
       render();
     };
   if ($('graph-mode'))
-    $('graph-mode').onchange = (e) => {
-      graphMode = e.target.value;
+    $('graph-mode').onchange = () => {
+      graphMode = $('graph-mode').value;
       render();
     };
   if ($('graph-context'))
-    $('graph-context').onchange = (e) => {
-      graphContext = e.target.checked;
+    $('graph-context').onchange = () => {
+      graphContext = $('graph-context').checked;
       render();
     };
   if ($('edge-mode'))
-    $('edge-mode').onchange = (e) => {
-      edgeMode = e.target.value;
+    $('edge-mode').onchange = () => {
+      edgeMode = $('edge-mode').value;
       render();
     };
   for (const [id, fn] of [
     ['zoom-out', () => (zoom = Math.max(0.5, zoom - 0.1))],
     ['zoom-in', () => (zoom = Math.min(1.5, zoom + 0.1))],
     ['zoom-reset', () => (zoom = 1)],
-  ])
+  ] as const)
     if ($(id))
       $(id).onclick = () => {
         fn();
         render();
       };
 }
-function setView(next, navigate = true) {
+function setView(next: string, navigate = true) {
   if (activeAgent) closeAgentPage(false);
   if (!$('detail').hidden) closeIssuePage(false);
   if (activeEpicId) closeEpic(false);
   view = next;
   if (navigate) navigateTo(next);
   document
-    .querySelectorAll('[data-view]')
+    .querySelectorAll<HTMLElement>('[data-view]')
     .forEach((b) => b.classList.toggle('selected', b.dataset.view === view));
-  $('view-title').textContent = {
-    board: t('board'),
-    graph: t('graph'),
-    list: t('list'),
-    activity: t('activity'),
-  }[view];
+  $('view-title').textContent = (
+    {
+      board: t('board'),
+      graph: t('graph'),
+      list: t('list'),
+      activity: t('activity'),
+    } as Record<string, string>
+  )[view];
   $('group').disabled = view !== 'board';
   render();
 }
 document
-  .querySelectorAll('[data-view]')
-  .forEach((b) => (b.onclick = () => setView(b.dataset.view)));
+  .querySelectorAll<HTMLElement>('[data-view]')
+  .forEach((b) => (b.onclick = () => setView(b.dataset.view!)));
 for (const id of [
   'search',
   'assignee',
@@ -843,7 +927,7 @@ for (const id of [
   'epic',
   'sort',
   'group',
-])
+] as const)
   $(id).addEventListener(id === 'search' ? 'input' : 'change', render);
 for (const id of ['ready', 'blocked'])
   $(id).onclick = () => {
@@ -851,22 +935,29 @@ for (const id of ['ready', 'blocked'])
     else onlyBlocked = !onlyBlocked;
     $(id).setAttribute(
       'aria-pressed',
-      id === 'ready' ? onlyReady : onlyBlocked,
+      String(id === 'ready' ? onlyReady : onlyBlocked),
     );
     render();
   };
 $('clear').onclick = () => {
-  for (const id of ['search', 'assignee', 'priority', 'type', 'label', 'epic'])
+  for (const id of [
+    'search',
+    'assignee',
+    'priority',
+    'type',
+    'label',
+    'epic',
+  ] as const)
     $(id).value = '';
   onlyReady = onlyBlocked = false;
-  $('ready').setAttribute('aria-pressed', false);
-  $('blocked').setAttribute('aria-pressed', false);
+  $('ready').setAttribute('aria-pressed', 'false');
+  $('blocked').setAttribute('aria-pressed', 'false');
   render();
 };
 function closeIssuePage(navigate = true) {
   $('detail').hidden = true;
   $('detail-body').replaceChildren();
-  document.querySelector('main').classList.remove('show-issue');
+  query(document, 'main').classList.remove('show-issue');
   if (activeEpicId) renderEpic();
   selectedID = null;
   detailVersion++;
@@ -879,7 +970,9 @@ $('close-detail').onclick = () => closeIssuePage();
 document.addEventListener('keydown', (e) => {
   if (
     e.key === '/' &&
-    !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) &&
+    !['INPUT', 'TEXTAREA', 'SELECT'].includes(
+      document.activeElement?.tagName || '',
+    ) &&
     $('detail').hidden
   ) {
     e.preventDefault();
@@ -887,26 +980,27 @@ document.addEventListener('keydown', (e) => {
   }
 });
 document.addEventListener('click', (e) => {
-  const link = e.target.closest('[data-detail]');
+  if (!(e.target instanceof Element)) return;
+  const link = e.target.closest<HTMLElement>('[data-detail]');
   if (link) {
     if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) {
       e.preventDefault();
-      openDetail(link.dataset.detail, false, false, true, true);
+      openDetail(link.dataset.detail!, false, false, true, true);
     }
     return;
   }
-  const epic = e.target.closest('[data-epic]');
+  const epic = e.target.closest<HTMLElement>('[data-epic]');
   if (epic) {
     if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) {
       e.preventDefault();
-      openEpic(epic.dataset.epic);
+      openEpic(epic.dataset.epic!);
     }
     return;
   }
-  const button = e.target.closest('[data-issue]');
-  if (button) openDetail(button.dataset.issue);
+  const button = e.target.closest<HTMLElement>('[data-issue]');
+  if (button) openDetail(button.dataset.issue!);
 });
-function duration(ms) {
+function duration(ms: number) {
   return new Intl.NumberFormat(locale(), {
     maximumFractionDigits: 1,
     style: 'unit',
@@ -914,7 +1008,7 @@ function duration(ms) {
     unitDisplay: 'short',
   }).format(ms / (ms >= 3600000 ? 3600000 : ms >= 60000 ? 60000 : 1000));
 }
-function statusStatistics(x) {
+function statusStatistics(x: Issue) {
   const timeline = x.statusTimeline;
   if (!timeline || timeline.reason)
     return `<section class="status-statistics"><h3>${t('statusTiming')}</h3><p class="muted">${t(timeline?.reason === 'ambiguous' ? 'timingAmbiguous' : 'timingUnavailable')}</p></section>`;
@@ -923,31 +1017,33 @@ function statusStatistics(x) {
 }
 let historyOrder =
   storage.get('beads-history-order') === 'oldest' ? 'oldest' : 'newest';
-function auditHistory(issue) {
+function auditHistory(issue: Issue) {
   const events = [...(issue.statusEvents || [])].sort(
     (a, b) =>
       (Date.parse(b.created_at) - Date.parse(a.created_at)) *
       (historyOrder === 'oldest' ? -1 : 1),
   );
-  const parse = (value) => {
+  const parse = (value: string | undefined): Record<string, unknown> | null => {
     try {
-      const x = JSON.parse(value);
-      return x && typeof x === 'object' && !Array.isArray(x) ? x : null;
+      const x: unknown = JSON.parse(value!);
+      return x && typeof x === 'object' && !Array.isArray(x)
+        ? (x as Record<string, unknown>)
+        : null;
     } catch {
       return null;
     }
   };
-  const value = (key, v) =>
+  const value = (key: string, v: unknown): string =>
     key === 'assignee'
-      ? avatar({ assignee: v })
+      ? avatar({ assignee: typeof v === 'string' ? v : undefined })
       : v === undefined || v === null
         ? '—'
         : key === 'status'
-          ? statusBadge(v)
+          ? statusBadge(String(v))
           : key === 'priority'
             ? priorityMarkup(v)
             : key === 'assignee'
-              ? avatar({ assignee: v })
+              ? avatar({ assignee: typeof v === 'string' ? v : undefined })
               : key === 'issue_type'
                 ? esc(valueLabel('type', v))
                 : key === 'dependency_type' || key === 'relation_type'
@@ -975,15 +1071,18 @@ function auditHistory(issue) {
       .join('')}</ol>`
   );
 }
-function linkedIssues(id, relations) {
+function linkedIssues(id: string, relations: Edge[]) {
   if (!relations.length) return `<p class="muted">${t('noRelations')}</p>`;
-  const groups = new Map();
+  const groups = new Map<
+    string,
+    { type: string; outgoing: boolean; edges: Edge[] }
+  >();
   for (const edge of relations) {
     const outgoing = edge.source === id;
     const key = edge.type + (outgoing ? ':out' : ':in');
     if (!groups.has(key))
       groups.set(key, { type: edge.type, outgoing, edges: [] });
-    groups.get(key).edges.push(edge);
+    groups.get(key)!.edges.push(edge);
   }
   return [...groups.values()]
     .map((group) => {
@@ -994,7 +1093,10 @@ function linkedIssues(id, relations) {
       return `<section class="linked-group"><h4>${esc(heading)}</h4><div class="linked-rows">${group.edges
         .map((edge) => {
           const other = group.outgoing ? edge.target : edge.source;
-          const item = data.issues.find((x) => x.id === other) || {
+          const item: Pick<
+            Issue,
+            'id' | 'title' | 'issue_type' | 'status' | 'priority' | 'assignee'
+          > = data.issues.find((x) => x.id === other) || {
             id: other,
             title: t('external'),
             issue_type: 'external',
@@ -1007,7 +1109,7 @@ function linkedIssues(id, relations) {
     .join('');
 }
 let issueActivityChoice = 'comments';
-function issuePageContent(x, relations) {
+function issuePageContent(x: Issue, relations: Edge[]) {
   const tab = issueActivityChoice;
   const comments =
     (x.comments || [])
@@ -1016,7 +1118,7 @@ function issuePageContent(x, relations) {
           `<article class="comment"><div class="comment-author"><span class="comment-identity">${avatar({ assignee: c.author })}</span><time>${esc(dateTime(c.created_at))}</time></div><p class="prose">${esc(c.text || c.body || c.content)}</p></article>`,
       )
       .join('') || `<p class="muted">${t('noComments')}</p>`;
-  const fields = [
+  const fields: [string, string | undefined][] = [
     ['description', x.description],
     ['acceptance', x.acceptance_criteria],
     ['design', x.design],
@@ -1052,17 +1154,23 @@ function issuePageContent(x, relations) {
     .filter(
       ([key, value]) => value || key === 'dateCreated' || key === 'updated',
     )
-    .map(([key, value]) => `<dt>${t(key)}</dt><dd>${esc(dateTime(value))}</dd>`)
+    .map(
+      ([key, value]) => `<dt>${t(key!)}</dt><dd>${esc(dateTime(value))}</dd>`,
+    )
     .join('')}</dl></section></aside></div>`;
 }
 document.addEventListener('change', (event) => {
-  if (event.target.id !== 'issue-activity') return;
+  if (
+    !(event.target instanceof HTMLSelectElement) ||
+    event.target.id !== 'issue-activity'
+  )
+    return;
   issueActivityChoice = event.target.value;
   for (const key of ['comments', 'history', 'timing', 'sessions'])
     $('issue-pane-' + key).hidden = key !== issueActivityChoice;
 });
 async function openDetail(
-  id,
+  id: string,
   quiet = false,
   _force = false,
   navigate = true,
@@ -1093,7 +1201,7 @@ async function openDetail(
     $('detail').dataset.mode = page ? 'page' : 'drawer';
   if (page) $('detail').dataset.mode = 'page';
   const fullPage = $('detail').dataset.mode === 'page';
-  document.querySelector('main').classList.toggle('show-issue', fullPage);
+  query(document, 'main').classList.toggle('show-issue', fullPage);
   $('close-detail').textContent = fullPage ? '←' : '✕';
   $('detail-resize').hidden = fullPage;
   if (!quiet && navigate && fullPage) {
@@ -1110,7 +1218,8 @@ async function openDetail(
     mountIssueDetails($('detail-body'), x, relation);
   } catch (error) {
     if (version === detailVersion && epoch === projectEpoch)
-      $('detail-body').innerHTML = `<p role="alert">${esc(error.message)}</p>`;
+      $('detail-body').innerHTML =
+        `<p role="alert">${esc(error instanceof Error ? error.message : String(error))}</p>`;
   }
 }
 function refreshChrome() {
@@ -1169,18 +1278,18 @@ function refreshChrome() {
       option.textContent = epic ? `${epic.title} · ${epic.id}` : option.value;
     }
 }
-function activityText(event) {
+function activityText(event: Activity) {
   const transition = event.text?.split(' → ');
   if (transition?.length === 2)
     return transition.map((status) => names[status] || status).join(' → ');
-  const keys = {
+  const keys: Record<string, string> = {
     'Nowe zadanie': 'newIssue',
     'Aktualizacja zadania': 'updatedIssue',
     'Zadanie usunięte': 'deletedIssue',
   };
   return keys[event.text] ? t(keys[event.text]) : event.text;
 }
-function receive(next) {
+function receive(next: Snapshot) {
   const old = new Map(data.issues.map((x) => [x.id, x]));
   changed = new Set(
     next.issues
@@ -1217,7 +1326,7 @@ function saveProjectView() {
   });
   storage.set('beads-project-views-v1', JSON.stringify([...projectViews]));
 }
-function selectProject(id, preserveRoute = false) {
+function selectProject(id: string | null, preserveRoute = false) {
   const requestedRoute = readRoute(new URL(location.href));
   const retainRoute = preserveRoute || !activeProjectId;
   if (id === activeProjectId) return;
@@ -1234,7 +1343,7 @@ function selectProject(id, preserveRoute = false) {
   liveAgentActivity = {};
   storage.set('beads-project', id || '');
   const selected = projectCatalog.find((p) => p.id === id);
-  const saved = projectViews.get(id);
+  const saved = projectViews.get(id!);
   view = (retainRoute ? requestedRoute.view : null) || saved?.view || 'board';
   onlyReady = saved?.onlyReady || false;
   onlyBlocked = saved?.onlyBlocked || false;
@@ -1244,19 +1353,23 @@ function selectProject(id, preserveRoute = false) {
       ? 'all'
       : saved?.edgeMode || 'blocking';
   graphMode =
-    { tasks: 'task', epics: 'epic' }[saved?.graphMode] ||
+    ({ tasks: 'task', epics: 'epic' } as Record<string, string>)[
+      saved?.graphMode || ''
+    ] ||
     saved?.graphMode ||
     'all';
   listMode =
-    { tasks: 'task', epics: 'epic' }[saved?.listMode] ||
+    ({ tasks: 'task', epics: 'epic' } as Record<string, string>)[
+      saved?.listMode || ''
+    ] ||
     saved?.listMode ||
     'all';
   listSort = saved?.listSort || { key: 'priority', direction: 'asc' };
   graphContext = saved?.graphContext ?? false;
   for (const key of filterIDs)
     $(key).value = key === 'sort' ? 'priority' : key === 'group' ? 'none' : '';
-  $('ready').setAttribute('aria-pressed', onlyReady);
-  $('blocked').setAttribute('aria-pressed', onlyBlocked);
+  $('ready').setAttribute('aria-pressed', String(onlyReady));
+  $('blocked').setAttribute('aria-pressed', String(onlyBlocked));
   changed = new Set();
   data = emptyProject(selected?.name);
   refreshChrome();
@@ -1277,7 +1390,7 @@ function selectProject(id, preserveRoute = false) {
   projectStream.onmessage = (e) => {
     if (epoch !== projectEpoch) return;
     try {
-      const next = JSON.parse(e.data);
+      const next: Snapshot = JSON.parse(e.data);
       if (next.projectId !== activeProjectId) return;
       receive(next);
       // Wait for the first successful data load before restoring select options.
@@ -1291,7 +1404,8 @@ function selectProject(id, preserveRoute = false) {
       }
     } catch (error) {
       $('error').hidden = false;
-      $('error').textContent = error.message;
+      $('error').textContent =
+        error instanceof Error ? error.message : String(error);
     }
   };
   projectStream.onerror = () => {
@@ -1303,7 +1417,7 @@ function selectProject(id, preserveRoute = false) {
     if (epoch === projectEpoch) selectProject(null);
   });
 }
-function updateProjects(next) {
+function updateProjects(next: Project[]) {
   projectCatalog = next;
   $('project-select').replaceChildren();
   if (!next.length) $('project-select').add(new Option(t('waiting'), ''));
@@ -1340,7 +1454,8 @@ catalogStream.onmessage = (e) => {
     updateProjects(JSON.parse(e.data));
   } catch (error) {
     $('error').hidden = false;
-    $('error').textContent = error.message;
+    $('error').textContent =
+      error instanceof Error ? error.message : String(error);
   }
 };
 catalogStream.onerror = () => {
@@ -1357,9 +1472,9 @@ initLanguage(() => {
 });
 
 let creating = false,
-  draftProject = null,
-  draftRequestId = null,
-  editingID = null;
+  draftProject: string | null = null,
+  draftRequestId: string | null = null,
+  editingID: string | null = null;
 function newIssue(parentId = '', type = 'task') {
   editingID = null;
   for (const option of [...$('create-type').options])
@@ -1440,15 +1555,15 @@ $('create-form').onsubmit = async (event) => {
   try {
     const capabilities = await fetch('/api/capabilities');
     if (!capabilities.ok) throw Error('Unavailable');
-    const { csrfToken } = await capabilities.json();
+    const { csrfToken }: Capabilities = await capabilities.json();
     const response = await fetch(
-      `/api/projects/${encodeURIComponent(draftProject)}/${editingID ? 'updates' : 'issues'}`,
+      `/api/projects/${encodeURIComponent(draftProject!)}/${editingID ? 'updates' : 'issues'}`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Observer-Token': csrfToken,
-          'X-Request-ID': draftRequestId,
+          'X-Request-ID': draftRequestId!,
         },
         body: JSON.stringify(
           editingID
@@ -1462,7 +1577,7 @@ $('create-form').onsubmit = async (event) => {
         ),
       },
     );
-    const result = await response.json();
+    const result: MutationResult = await response.json();
     if (!response.ok) throw Error(result.error || 'Creation failed');
     $('create-dialog').close();
     if (editingID) {
@@ -1472,7 +1587,10 @@ $('create-form').onsubmit = async (event) => {
     createdToast(result.id, editingID ? 'updated' : payload.type, draftProject);
   } catch (error) {
     $('create-error').hidden = false;
-    $('create-error').textContent = t('createUncertain') + ' ' + error.message;
+    $('create-error').textContent =
+      t('createUncertain') +
+      ' ' +
+      (error instanceof Error ? error.message : String(error));
   } finally {
     creating = false;
     $('submit-create').disabled = false;
@@ -1481,7 +1599,7 @@ $('create-form').onsubmit = async (event) => {
   }
 };
 
-function createdToast(id, type, project) {
+function createdToast(id: string, type: string, project: string | null) {
   const toast = $('toast');
   toast.innerHTML = `<span>${t(type === 'updated' ? 'issueUpdated' : type === 'epic' ? 'epicCreated' : 'issueCreated')}</span>${issueLink(data.issues.find((item) => item.id === id) || { id, issue_type: type })}<button id="toast-view">${t('viewCreated')}</button><button id="toast-dismiss" aria-label="${t('close')}">✕</button>`;
   toast.hidden = false;
@@ -1491,18 +1609,19 @@ function createdToast(id, type, project) {
     try {
       const response = await fetch(projectURL('snapshot'));
       if (!response.ok) throw Error(t('readError'));
-      const snapshot = await response.json();
+      const snapshot: Snapshot = await response.json();
       if (activeProjectId !== project) return;
       receive(snapshot);
       toast.hidden = true;
       await openDetail(id, false, false, true, true);
     } catch (error) {
-      toast.querySelector('span').textContent = error.message;
+      query(toast, 'span').textContent =
+        error instanceof Error ? error.message : String(error);
     }
   };
 }
-let relationProject = null,
-  relationRequest = null,
+let relationProject: string | null = null,
+  relationRequest: string | null = null,
   relating = false;
 function relationDirection() {
   const type = $('relation-type').value;
@@ -1519,7 +1638,7 @@ function newRelation(issueId = '') {
   relationRequest = crypto.randomUUID();
   $('relation-form').reset();
   $('relation-error').hidden = true;
-  for (const id of ['relation-issue', 'relation-target']) {
+  for (const id of ['relation-issue', 'relation-target'] as const) {
     $(id).replaceChildren(new Option(t('selectIssue'), ''));
     for (const item of data.issues) {
       const option = new Option(`${item.id} · ${item.title}`, item.id);
@@ -1540,7 +1659,10 @@ function newRelation(issueId = '') {
 }
 $('new-relation').onclick = () => newRelation();
 document.addEventListener('click', (event) => {
-  const button = event.target.closest('[data-add-relation]');
+  const button =
+    event.target instanceof Element
+      ? event.target.closest<HTMLElement>('[data-add-relation]')
+      : null;
   if (button) newRelation(button.dataset.addRelation);
 });
 $('relation-type').onchange = relationDirection;
@@ -1575,20 +1697,20 @@ $('relation-form').onsubmit = async (event) => {
   try {
     const capabilities = await fetch('/api/capabilities');
     if (!capabilities.ok) throw Error(t('readError'));
-    const { csrfToken } = await capabilities.json();
+    const { csrfToken }: Capabilities = await capabilities.json();
     const response = await fetch(
-      `/api/projects/${encodeURIComponent(relationProject)}/relations`,
+      `/api/projects/${encodeURIComponent(relationProject!)}/relations`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Observer-Token': csrfToken,
-          'X-Request-ID': relationRequest,
+          'X-Request-ID': relationRequest!,
         },
         body: JSON.stringify(payload),
       },
     );
-    const result = await response.json();
+    const result: MutationResult = await response.json();
     if (!response.ok) throw Error(result.error || t('readError'));
     $('relation-dialog').close();
     if (activeProjectId === relationProject) {
@@ -1596,7 +1718,8 @@ $('relation-form').onsubmit = async (event) => {
       if (snapshot.ok) receive(await snapshot.json());
     }
   } catch (error) {
-    $('relation-error').textContent = error.message;
+    $('relation-error').textContent =
+      error instanceof Error ? error.message : String(error);
     $('relation-error').hidden = false;
   } finally {
     relating = false;
@@ -1605,7 +1728,7 @@ $('relation-form').onsubmit = async (event) => {
   }
 };
 
-async function editIssue(id) {
+async function editIssue(id: string) {
   const project = activeProjectId;
   try {
     const issue = await fetchIssue(id);
@@ -1647,31 +1770,35 @@ async function editIssue(id) {
     syncSelects();
   } catch (error) {
     $('error').hidden = false;
-    $('error').textContent = error.message;
+    $('error').textContent =
+      error instanceof Error ? error.message : String(error);
   }
 }
 document.addEventListener('click', (event) => {
-  const button = event.target.closest('[data-edit-issue]');
-  if (button) editIssue(button.dataset.editIssue);
+  const button =
+    event.target instanceof Element
+      ? event.target.closest<HTMLElement>('[data-edit-issue]')
+      : null;
+  if (button) editIssue(button.dataset.editIssue!);
 });
 
-function drawerWidth(width, persist = true) {
+function drawerWidth(width: number | string | null, persist = true) {
   const size = Math.max(
     320,
     Math.min(Number(width) || 620, Math.max(320, innerWidth - 32)),
   );
   document.documentElement.style.setProperty('--drawer-width', size + 'px');
-  $('detail-resize').setAttribute('aria-valuenow', Math.round(size));
+  $('detail-resize').setAttribute('aria-valuenow', String(Math.round(size)));
   $('detail-resize').setAttribute('aria-label', t('resizePanel'));
   if (persist) storage.set('beads-drawer-width', String(Math.round(size)));
 }
 drawerWidth(storage.get('beads-drawer-width'), false);
 $('detail-resize').onpointerdown = (event) => {
   event.preventDefault();
-  const handle = event.currentTarget;
+  const handle = $('detail-resize');
   handle.setPointerCapture(event.pointerId);
-  const move = (e) => drawerWidth(innerWidth - e.clientX, false);
-  const up = (e) => {
+  const move = (e: PointerEvent) => drawerWidth(innerWidth - e.clientX, false);
+  const up = (e: PointerEvent) => {
     drawerWidth(innerWidth - e.clientX);
     handle.removeEventListener('pointermove', move);
     handle.removeEventListener('pointerup', up);
@@ -1694,7 +1821,7 @@ function closeAgentPage(navigate = false) {
   agentLoad++;
   agentLoading = false;
   $('agent-page').hidden = true;
-  document.querySelector('main').classList.remove('show-agent');
+  query(document, 'main').classList.remove('show-agent');
   if (navigate) {
     navigateTo();
   }
@@ -1758,13 +1885,13 @@ async function loadAgentHistory() {
     renderAgentPage();
   }
 }
-function openAgentPage(actor, navigate = true) {
+function openAgentPage(actor: string, navigate = true) {
   if (!actor) return;
   closeEpic(false);
   closeIssuePage(false);
   activeAgent = actor;
   $('agent-page').hidden = false;
-  document.querySelector('main').classList.add('show-agent');
+  query(document, 'main').classList.add('show-agent');
   if (navigate) {
     navigateTo('agents', actor);
   }
@@ -1773,7 +1900,10 @@ function openAgentPage(actor, navigate = true) {
 document.addEventListener(
   'click',
   (event) => {
-    const avatar = event.target.closest('[data-agent]');
+    const avatar =
+      event.target instanceof Element
+        ? event.target.closest<HTMLElement>('[data-agent]')
+        : null;
     if (!avatar?.dataset.agent) return;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -1784,7 +1914,10 @@ document.addEventListener(
 document.addEventListener(
   'keydown',
   (event) => {
-    const avatar = event.target.closest('[data-agent]');
+    const avatar =
+      event.target instanceof Element
+        ? event.target.closest<HTMLElement>('[data-agent]')
+        : null;
     if (!avatar?.dataset.agent || !['Enter', ' '].includes(event.key)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -1796,15 +1929,19 @@ document.addEventListener(
 document.addEventListener('keydown', (event) => {
   if (
     ['Enter', ' '].includes(event.key) &&
+    event.target instanceof HTMLElement &&
     event.target.matches('[data-issue][tabindex]')
   ) {
     event.preventDefault();
-    openDetail(event.target.dataset.issue);
+    openDetail(event.target.dataset.issue!);
   }
 });
 
 document.addEventListener('click', (event) => {
-  const button = event.target.closest('[data-new-child]');
+  const button =
+    event.target instanceof Element
+      ? event.target.closest<HTMLElement>('[data-new-child]')
+      : null;
   if (button) newIssue(button.dataset.newChild);
 });
 
@@ -1824,16 +1961,18 @@ initResetUI({
 });
 
 function paintAgentPresence() {
-  for (const avatar of document.querySelectorAll('[data-issue-agent]')) {
+  for (const avatar of document.querySelectorAll<HTMLElement>(
+    '[data-issue-agent]',
+  )) {
     const actor = avatar.dataset.agent,
       id = avatar.dataset.issueAgent;
-    const sessions = liveAgentActivity[id] || [];
+    const sessions = liveAgentActivity[id!] || [];
     // Agent IDs are types (e.g. build), not necessarily Beads assignee names.
     // Expose task activity without pretending it belongs to the assigned person.
     let indicator = avatar.nextElementSibling?.classList.contains(
       'task-session-presence',
     )
-      ? avatar.nextElementSibling
+      ? (avatar.nextElementSibling as HTMLElement)
       : null;
     if (sessions.length) {
       if (!indicator) {
@@ -1860,7 +1999,7 @@ async function refreshAgentPresence() {
     if (project && !document.hidden) {
       const response = await fetch(projectURL('sessions') + '?summary=1');
       if (!response.ok) throw Error();
-      const result = await response.json();
+      const result: SessionResult = await response.json();
       if (project !== activeProjectId) return;
       liveAgentActivity =
         result.available === true ? result.activity || {} : {};
@@ -1874,7 +2013,7 @@ async function refreshAgentPresence() {
 }
 void refreshAgentPresence();
 const presenceObserver = new MutationObserver(() => paintAgentPresence());
-presenceObserver.observe(document.querySelector('#observer-app'), {
+presenceObserver.observe(query(document, '#observer-app'), {
   childList: true,
   subtree: true,
 });
