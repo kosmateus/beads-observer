@@ -646,6 +646,7 @@ export async function observeOpenCodeSessions(
       const info = data(await ctx.session.get({ sessionID }));
       if (!(await belongs(info)))
         throw Error('Session belongs to another project');
+      metadataCache.delete(sessionID);
       manual.set(sessionID, [
         ...(manual.get(sessionID) || []).filter((id) => id !== issueId),
         issueId,

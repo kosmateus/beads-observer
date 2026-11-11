@@ -26,6 +26,7 @@ test('token storms bound get/context/diff for seven active sessions, 260 histori
   const history = Array.from({ length: 260 }, (_, i) => 'history-' + i);
   const counts = { get: 0, context: 0, diff: 0, foreignGet: 0 };
   let foreignDirectory = '/foreign';
+  let manualDirectory = '/foreign';
   const queue: string[] = [];
   let wake: (() => void) | undefined;
   const emit = async (id: string, type = 'session.text.delta') => {
@@ -45,7 +46,12 @@ test('token storms bound get/context/diff for seven active sessions, 260 histori
         return {
           id: sessionID,
           location: {
-            directory: sessionID === 'foreign' ? foreignDirectory : '/project',
+            directory:
+              sessionID === 'foreign'
+                ? foreignDirectory
+                : sessionID === 'manual-target'
+                  ? manualDirectory
+                  : '/project',
           },
           time: { updated: 1 },
         };
@@ -140,6 +146,15 @@ test('token storms bound get/context/diff for seven active sessions, 260 histori
     assert.ok(
       records.has('new-child'),
       'unknown children bypass historical maintenance cadence',
+    );
+    await emit('manual-target', 'session.created');
+    await observer.refresh();
+    assert.ok(!records.has('manual-target'));
+    manualDirectory = '/project';
+    await observer.bind('manual-target', 'test-a');
+    assert.ok(
+      records.has('manual-target'),
+      'explicit binding revalidates cached foreign metadata immediately',
     );
   } finally {
     await observer.close();
