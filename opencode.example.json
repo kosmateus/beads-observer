@@ -1,0 +1,9 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "@opentoria/beads-observer",
+      "options": { "port": 4317, "pollIntervalMs": 2000, "bdPath": "bd" }
+    }
+  ]
+}

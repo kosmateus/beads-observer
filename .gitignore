@@ -1,0 +1,45 @@
+
+# Local dependencies, builds and release archives
+node_modules/
+dist/
+release-artifacts/
+coverage/
+*.tgz
+*.log
+
+# Local Beads/Dolt databases and credentials (never publish project data)
+.beads/
+.dolt/
+*.db
+*.db-*
+.beads-credential-key
+*.gate.lock*
+
+# Machine-specific agent, CAD and IDE configuration
+.agents/
+.claude/
+.codex/
+.cursor/
+.cad/
+.idea/
+.vscode/
+
+# Imported working copies and Windows download metadata
+/work/
+# Legacy offline installers tied to old local archives
+/install.sh
+/install.ps1
+/INSTALL-PL.md
+/stop-running.mjs
+*:Zone.Identifier*
+.DS_Store
+Thumbs.db
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+.npmrc
+*.pem
+*.key
+.husky/_/

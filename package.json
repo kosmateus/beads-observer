@@ -1,0 +1,89 @@
+{
+  "name": "@opentoria/beads-observer",
+  "version": "0.16.3",
+  "type": "module",
+  "description": "Beads board, dependency explorer and issue creation for OpenCode",
+  "exports": {
+    ".": "./index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "demo": "node src/cli.js --demo",
+    "build": "node scripts/build.mjs",
+    "prepack": "npm run build",
+    "test": "node --test test/*.test.js",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "pack:check": "node scripts/check-package.mjs",
+    "check": "npm run lint && npm run format:check && npm run build && npm test && npm run pack:check",
+    "release": "semantic-release",
+    "prepare": "husky"
+  },
+  "files": [
+    "index.js",
+    "src",
+    "web",
+    "README.md",
+    "opencode.example.json",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "@opencode/plugin": "*"
+  },
+  "peerDependenciesMeta": {
+    "@opencode/plugin": {
+      "optional": true
+    }
+  },
+  "license": "MIT",
+  "bin": {
+    "beads-observer": "src/cli.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kosmateus/beads-observer.git"
+  },
+  "homepage": "https://github.com/kosmateus/beads-observer#readme",
+  "bugs": {
+    "url": "https://github.com/kosmateus/beads-observer/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "beads",
+    "opencode",
+    "dashboard",
+    "issues",
+    "agents"
+  ],
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@semantic-release/commit-analyzer": "13.0.1",
+    "@semantic-release/exec": "7.1.0",
+    "@semantic-release/github": "12.0.10",
+    "@semantic-release/npm": "13.2.0",
+    "@semantic-release/release-notes-generator": "14.1.1",
+    "conventional-changelog-conventionalcommits": "10.4.1",
+    "eslint": "10.13.0",
+    "globals": "17.14.0",
+    "husky": "9.1.7",
+    "lint-staged": "17.6.0",
+    "prettier": "3.9.10",
+    "semantic-release": "25.0.9"
+  },
+  "lint-staged": {
+    "*.{js,mjs,cjs}": [
+      "eslint --fix --max-warnings 0",
+      "prettier --write"
+    ],
+    "*.{json,jsonc,yml,yaml,md,css,html}": [
+      "prettier --write"
+    ]
+  }
+}
