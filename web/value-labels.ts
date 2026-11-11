@@ -2,7 +2,7 @@ import { catalogs } from './catalogs.js';
 import { locale } from './i18n.js';
 // Values are presentation-only. Namespace allowlists prevent custom values such as
 // "title" or "constructor" from accidentally matching unrelated UI strings.
-const valueKeys = {
+const valueKeys: Record<string, Record<string, string>> = {
   type: Object.fromEntries(
     [
       'task',
@@ -83,7 +83,7 @@ const valueKeys = {
     type: 'type',
   },
 };
-export function valueLabel(kind, value, language = locale()) {
+export function valueLabel(kind: string, value: unknown, language = locale()) {
   if (value === null || value === undefined) return '—';
   const raw = String(value),
     keys = valueKeys[kind];

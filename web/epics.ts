@@ -1,15 +1,20 @@
 /** All epic ancestors, nearest first; parent-child is hierarchy, never a blocking inference. */
-export function epicAncestors(id, issues, edges) {
+import type { Issue, Edge } from './contracts.js';
+export function epicAncestors(
+  id: string,
+  issues: Issue[],
+  edges: Edge[],
+): Issue[] {
   const byId = new Map(issues.map((issue) => [issue.id, issue]));
-  const parents = new Map();
+  const parents = new Map<string, string[]>();
   for (const edge of edges)
     if (edge.type === 'parent-child') {
       if (!parents.has(edge.target)) parents.set(edge.target, []);
-      parents.get(edge.target).push(edge.source);
+      parents.get(edge.target)!.push(edge.source);
     }
   const seen = new Set([id]),
     queue = [...(parents.get(id) || [])],
-    result = [];
+    result: Issue[] = [];
   for (let i = 0; i < queue.length; i++) {
     const next = queue[i];
     if (seen.has(next)) continue;
@@ -22,7 +27,11 @@ export function epicAncestors(id, issues, edges) {
 }
 
 /** Direct children only: blocking/related issues are never counted as children. */
-export function epicChildren(id, issues, edges) {
+export function epicChildren(
+  id: string,
+  issues: Issue[],
+  edges: Edge[],
+): Issue[] {
   const ids = new Set(
     edges
       .filter(
@@ -42,7 +51,7 @@ export function epicChildren(id, issues, edges) {
       },
   );
 }
-export function epicColor(id) {
+export function epicColor(id: string) {
   const colors = [
     '#6e56cf',
     '#176bba',
@@ -58,9 +67,9 @@ export function epicColor(id) {
 }
 
 /** Actual parent-child paths; no inference from IDs or issue types. Bound cycles and branching. */
-export function hierarchyPaths(id, edges) {
-  const paths = [];
-  function visit(current, trail) {
+export function hierarchyPaths(id: string, edges: Edge[]) {
+  const paths: string[][] = [];
+  function visit(current: string, trail: string[]) {
     if (paths.length >= 32) return;
     const parents = [
       ...new Set(

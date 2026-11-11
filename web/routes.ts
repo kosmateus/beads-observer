@@ -1,5 +1,10 @@
-const routeViews = new Set(['board', 'graph', 'list', 'activity']);
-export function readRoute(url) {
+const routeViews = new Set<string | null>([
+  'board',
+  'graph',
+  'list',
+  'activity',
+]);
+export function readRoute(url: URL) {
   const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
   const legacy = new URLSearchParams(url.hash.slice(1));
   if (parts[0] === 'projects' && parts[1]) {
@@ -19,10 +24,14 @@ export function readRoute(url) {
     agent: legacy.get('agent'),
   };
 }
-export function routePath(project, kind = 'board', id) {
+export function routePath(
+  project: string | null,
+  kind = 'board',
+  id?: string | null,
+) {
   return (
     '/projects/' +
-    encodeURIComponent(project) +
+    encodeURIComponent(project!) +
     '/' +
     kind +
     (id == null ? '' : '/' + encodeURIComponent(id))

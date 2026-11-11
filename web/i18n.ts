@@ -1,4 +1,5 @@
 import { catalogs } from './catalogs.js';
+import { byId } from './dom.js';
 
 // Flags are visual language shortcuts, not an assertion about EU membership.
 export const languages = [
@@ -44,10 +45,13 @@ export function resolveLocale(preference = 'system', systemLanguage = 'en') {
 export function locale() {
   return activeLocale;
 }
-export function t(key) {
+export function t(key: string) {
   return catalogs[activeLocale]?.[key] ?? catalogs.en[key] ?? key;
 }
-export function dateTime(value, timeOnly = false) {
+export function dateTime(
+  value: string | number | null | undefined,
+  timeOnly = false,
+) {
   if (!value) return '—';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
@@ -58,30 +62,31 @@ export function dateTime(value, timeOnly = false) {
       : { dateStyle: 'medium', timeStyle: 'short' },
   ).format(date);
 }
-export function translateStatic(root = document) {
-  root.querySelectorAll('[data-i18n]').forEach((node) => {
-    node.textContent = (node.dataset.i18nPrefix || '') + t(node.dataset.i18n);
+export function translateStatic(root: ParentNode = document) {
+  root.querySelectorAll<HTMLElement>('[data-i18n]').forEach((node) => {
+    node.textContent = (node.dataset.i18nPrefix || '') + t(node.dataset.i18n!);
   });
   for (const [attribute, dataKey] of [
     ['placeholder', 'i18nPlaceholder'],
     ['aria-label', 'i18nAria'],
   ]) {
     root
-      .querySelectorAll(
+      .querySelectorAll<HTMLElement>(
         `[data-${dataKey.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())}]`,
       )
       .forEach((node) => {
-        node.setAttribute(attribute, t(node.dataset[dataKey]));
+        node.setAttribute(attribute, t(node.dataset[dataKey]!));
       });
   }
 }
 /** Browser adapter: selection, system changes, persistence and semantic document language. */
-export function initLanguage(onChange) {
-  const select = document.getElementById('language');
+export function initLanguage(onChange: (locale: string) => void) {
+  const select = byId<HTMLSelectElement>('language');
   let preference = 'system';
   try {
     const saved = localStorage.getItem('beads-language');
-    if (saved === 'system' || supported.has(saved)) preference = saved;
+    if (saved !== null && (saved === 'system' || supported.has(saved)))
+      preference = saved;
   } catch {
     /* Storage can be disabled in private or embedded browsers. */
   }
@@ -92,13 +97,12 @@ export function initLanguage(onChange) {
     );
     document.documentElement.lang = activeLocale;
     select.replaceChildren();
-    const current = languages.find(([code]) => code === activeLocale);
+    const current = languages.find(([code]) => code === activeLocale)!;
     select.add(new Option(`🌐 ${t('system')}`, 'system'));
     for (const [code, flag, name] of languages)
       select.add(new Option(`${flag} ${name}`, code));
     select.value = preference;
-    document.getElementById('resolved-language').textContent =
-      `${current[1]} ${current[2]}`;
+    byId('resolved-language').textContent = `${current[1]} ${current[2]}`;
     translateStatic();
     onChange(activeLocale);
     window.dispatchEvent(

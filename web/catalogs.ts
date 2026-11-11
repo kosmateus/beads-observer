@@ -1,4 +1,4 @@
-export const catalogs = {
+export const catalogs: Record<string, Record<string, string>> = {
   en: {
     language: 'Language',
     system: 'System language',

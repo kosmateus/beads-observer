@@ -1,13 +1,20 @@
-const html = (value) =>
+import type {
+  Translate,
+  Session,
+  SessionBlock,
+  SessionResult,
+} from './contracts.js';
+import { query } from './dom.js';
+const html = (value: unknown) =>
   String(value ?? '').replace(
     /[&<>"']/g,
     (c) =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[
-        c
+        c as '&' | '<' | '>' | '"' | "'"
       ],
   );
-export function terminalText(text) {
-  const colors = {
+export function terminalText(text: string) {
+  const colors: Record<string, string> = {
     30: 'muted',
     31: 'red',
     32: 'green',
@@ -25,7 +32,7 @@ export function terminalText(text) {
     96: 'blue',
     97: 'text',
   };
-  let color = null,
+  let color: string | null = null,
     result = '',
     offset = 0;
   // ANSI escape sequences intentionally include the ESC control character.
@@ -44,7 +51,7 @@ export function terminalText(text) {
   const tail = html((text || '').slice(offset));
   return result + (color ? `<span class="ansi-${color}">${tail}</span>` : tail);
 }
-export function patchMarkup(patch) {
+export function patchMarkup(patch: string | undefined) {
   let before = 0,
     after = 0;
   return String(patch || '')
@@ -64,10 +71,10 @@ export function patchMarkup(patch) {
     })
     .join('');
 }
-function blockMarkup(block, t) {
+function blockMarkup(block: SessionBlock, t: Translate) {
   const duration =
     block.time?.completed && block.time?.created
-      ? ` · ${Math.max(0, (new Date(block.time.completed) - new Date(block.time.created)) / 1000).toFixed(1)}s`
+      ? ` · ${Math.max(0, (new Date(block.time.completed).getTime() - new Date(block.time.created).getTime()) / 1000).toFixed(1)}s`
       : '';
   if (block.kind === 'reasoning')
     return `<details class="session-thought" data-log-key="${html(block.id)}"><summary>✦ ${t('sessionThought')}${duration}</summary><pre>${html(block.text)}</pre></details>`;
@@ -78,10 +85,13 @@ function blockMarkup(block, t) {
   return `<div class="session-message session-${html(block.kind)}"><small>${block.kind === 'user' ? t('sessionUser') : t('sessionAssistant')}</small><pre>${html(block.text)}</pre></div>`;
 }
 export function renderSessions(
-  sessions,
-  t,
-  issueId,
-  { available = false, warnings = [] } = {},
+  sessions: Session[],
+  t: Translate,
+  issueId: string,
+  {
+    available = false,
+    warnings = [],
+  }: Pick<SessionResult, 'available' | 'warnings'> = {},
 ) {
   const notice =
     (!available ? `<p class="muted">${t('sessionReadUnavailable')}</p>` : '') +
@@ -103,12 +113,26 @@ export function renderSessions(
       .join('')
   );
 }
-export function mountSessionPanel(root, { issueId, url, t, skeleton }) {
-  if (!root) return;
+export function mountSessionPanel(
+  element: HTMLElement | null,
+  {
+    issueId,
+    url,
+    t,
+    skeleton,
+  }: {
+    issueId: string;
+    url: string;
+    t: Translate;
+    skeleton: (kind: string, count: number) => string;
+  },
+) {
+  if (!element) return;
+  const root = element;
   root.innerHTML = `<h3>${t('sessionLog')}</h3><div class="session-live-body">${skeleton('activity', 2)}</div>`;
-  const body = root.querySelector('.session-live-body');
+  const body = query(root, '.session-live-body');
   let last = '',
-    timer,
+    timer: ReturnType<typeof setTimeout> | undefined,
     closed = false;
   const controller = new AbortController();
   async function refresh() {
@@ -125,13 +149,13 @@ export function mountSessionPanel(root, { issueId, url, t, skeleton }) {
         url + '?issue=' + encodeURIComponent(issueId),
         { signal: controller.signal },
       );
-      const result = await response.json();
+      const result: SessionResult = await response.json();
       if (!response.ok) throw Error(result.error || t('readError'));
       if (!root.isConnected || closed) return;
       const signature = JSON.stringify(result);
       if (signature !== last) {
         const opened = new Set(
-          [...body.querySelectorAll('details[open]')].map(
+          [...body.querySelectorAll<HTMLDetailsElement>('details[open]')].map(
             (x) => x.dataset.logKey,
           ),
         );
@@ -153,7 +177,7 @@ export function mountSessionPanel(root, { issueId, url, t, skeleton }) {
       }
     } catch (error) {
       if (!controller.signal.aborted && root.isConnected) {
-        body.innerHTML = `<p class="session-error">${html(error.message)}</p>`;
+        body.innerHTML = `<p class="session-error">${html(error instanceof Error ? error.message : String(error))}</p>`;
         last = '';
       }
     }
