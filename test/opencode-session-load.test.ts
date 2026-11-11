@@ -24,6 +24,7 @@ test('token storms keep seven sessions current without repeating heavy reads; mu
     maximum = 0;
   let failure: Error | undefined;
   let userTurn = 'user-1';
+  let shellState: string | undefined;
   const parts = new Map<string, SessionPart[]>();
   const queue: string[] = [];
   let wake: (() => void) | undefined;
@@ -64,6 +65,16 @@ test('token storms keep seven sessions current without repeating heavy reads; mu
         contexts++;
         await heavy();
         return [
+          ...(shellState
+            ? [
+                {
+                  type: 'shell',
+                  id: 'native-shell',
+                  command: 'write-file',
+                  status: shellState,
+                },
+              ]
+            : []),
           {
             type: 'user',
             id: sessionID === ids[0] ? userTurn : 'user-1',
@@ -271,6 +282,34 @@ test('token storms keep seven sessions current without repeating heavy reads; mu
       diffs,
       beforeFallback + 2,
       'known read-only tools update logs but not the diff',
+    );
+    parts.set(ids[0], [
+      ...parts.get(ids[0])!,
+      { type: 'tool', id: 'no-state' },
+      { type: 'tool', id: 'no-name', state: { status: 'completed' } },
+    ]);
+    await emit('session.tool.success');
+    await observer.refresh();
+    shellState = 'running';
+    now += 5000;
+    await observer.refresh();
+    const beforeNativeShell = diffs;
+    now += 30000;
+    await observer.refresh();
+    assert.ok(
+      diffs > beforeNativeShell,
+      'native shell also receives a bounded fallback',
+    );
+    shellState = 'completed';
+    await emit('session.shell.ended');
+    await observer.refresh();
+    const afterNativeShell = diffs;
+    await emit('');
+    await observer.refresh();
+    assert.equal(
+      diffs,
+      afterNativeShell,
+      'untyped events do not invalidate file snapshots',
     );
   } finally {
     await observer.close();

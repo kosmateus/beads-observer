@@ -383,12 +383,12 @@ export async function observeOpenCodeSessions(
         const due =
           !cached.permanent &&
           (cached.diffKey !== diffKey ||
-            (Date.now() - (cached.diffAt || 0) >= 30000 &&
+            (Date.now() - cached.diffAt! >= 30000 &&
               (cached.diffError || runningTool)));
         const coolingDown =
           cached.diffError &&
           !cached.permanent &&
-          Date.now() - (cached.diffAt || 0) < 30000;
+          Date.now() - cached.diffAt! < 30000;
         if (due && !coolingDown) {
           cached.diffKey = diffKey;
           cached.diffScope = diffScope;

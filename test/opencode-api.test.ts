@@ -9,7 +9,7 @@ import { openCodeAPI } from '../src/adapters/opencode-api.js';
 test('HTTP fallback uses only the registered owner', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'observer-api-'));
   let responsePid = 123;
-  let badRange = false,
+  let badRange: 'json' | 'text' | false = false,
     infoReads = 0;
   const server = createServer((req, res) => {
     if (req.url === '/api/info') infoReads++;
@@ -23,9 +23,11 @@ test('HTTP fallback uses only the registered owner', async () => {
     }
     res.setHeader('Content-Type', 'application/json');
     if (badRange && req.url?.includes('/diff')) {
-      res.writeHead(400);
+      res.writeHead(badRange === 'json' ? 400 : 503);
       res.end(
-        JSON.stringify({ message: 'Turn range spans a location change' }),
+        badRange === 'json'
+          ? JSON.stringify({ message: 'Turn range spans a location change' })
+          : 'temporarily offline',
       );
       return;
     }
@@ -61,7 +63,7 @@ test('HTTP fallback uses only the registered owner', async () => {
       data: { child: { type: 'running' } },
     });
     assert.deepEqual(await api.diff({ sessionID: 'child' }), { data: [] });
-    badRange = true;
+    badRange = 'json';
     for (let i = 0; i < 2; i++)
       await assert.rejects(api.diff({ sessionID: 'child' }), {
         status: 400,
@@ -71,6 +73,17 @@ test('HTTP fallback uses only the registered owner', async () => {
       infoReads,
       1,
       'invalid turn ranges do not invalidate endpoint discovery',
+    );
+    badRange = 'text';
+    await assert.rejects(api.diff({ sessionID: 'child' }), {
+      status: 503,
+      message: 'OpenCode API HTTP 503',
+    });
+    await api.active();
+    assert.equal(
+      infoReads,
+      2,
+      'transient failures permit endpoint rediscovery',
     );
     await assert.rejects(
       openCodeAPI({
