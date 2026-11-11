@@ -5,13 +5,25 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { observeOpenCodeSessions } from '../src/adapters/opencode-sessions.js';
 import { readSessionRecords } from '../src/adapters/session-records.js';
+import type { ObserverContext } from '../src/adapters/opencode-types.js';
+import { memoryStorage } from './fixtures.js';
 
 test('V2 envelopes without active/diff context methods; independent child, change, unknown and cleanup', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'observer-session-test-'));
-  let active = { child: { type: 'running' } },
-    task = 'test-a',
+  let active: Record<string, { type: string }> = { child: { type: 'running' } };
+  let task = 'test-a',
     fail = false;
-  const infos = {
+  const infos: Record<
+    string,
+    {
+      id: string;
+      parentID?: string;
+      agent?: string;
+      location: { directory: string };
+      time: { updated: number };
+      outcome?: string;
+    }
+  > = {
     parent: { id: 'parent', location: { directory }, time: { updated: 1 } },
     child: {
       id: 'child',
@@ -21,12 +33,14 @@ test('V2 envelopes without active/diff context methods; independent child, chang
       time: { updated: 1 },
     },
   };
-  const ctx = {
-    storage: { get: async () => undefined, set: async () => {} },
+  const ctx: ObserverContext = {
+    storage: memoryStorage(),
     session: {
       list: async () => ({ data: Object.values(infos), cursor: {} }),
-      get: async ({ sessionID }) => ({ data: infos[sessionID] }),
-      context: async ({ sessionID }) => ({
+      get: async ({ sessionID }: { sessionID: string }) => ({
+        data: infos[sessionID],
+      }),
+      context: async ({ sessionID }: { sessionID: string }) => ({
         data: [
           {
             id: 'm',
@@ -38,6 +52,7 @@ test('V2 envelopes without active/diff context methods; independent child, chang
     },
     event: {
       async *subscribe({ signal }) {
+        assert.ok(signal);
         await new Promise((resolve) =>
           signal.addEventListener('abort', resolve, { once: true }),
         );
@@ -67,7 +82,12 @@ test('V2 envelopes without active/diff context methods; independent child, chang
     assert.equal(records[0].sessionID, 'child');
     assert.equal(records[0].status, 'running');
     assert.equal(records[0].activeIssueId, 'test-a');
-    assert.equal(records[0].diffs[0].file, 'a.js');
+    const childRecord: unknown = records[0];
+    assert.ok(
+      childRecord && typeof childRecord === 'object' && 'diffs' in childRecord,
+    );
+    assert.ok(Array.isArray(childRecord.diffs));
+    assert.equal(childRecord.diffs[0].file, 'a.js');
     task = 'test-b';
     infos.child.time.updated++;
     await observer.refresh();
@@ -86,8 +106,10 @@ test('V2 envelopes without active/diff context methods; independent child, chang
     const bridge = (await readdir(directory)).find((x) =>
       x.startsWith('bridge-'),
     );
+    assert.ok(bridge);
     assert.equal(
-      JSON.parse(await readFile(join(directory, bridge))).activityAvailable,
+      JSON.parse(await readFile(join(directory, bridge), 'utf8'))
+        .activityAvailable,
       false,
     );
   } finally {
@@ -98,15 +120,15 @@ test('V2 envelopes without active/diff context methods; independent child, chang
 
 test('JSON event discovers a child between catalog polls and subscription closes', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'observer-event-test-'));
-  let deliver,
-    aborted = false,
+  let deliver: ((value: string | null) => void) | undefined;
+  let aborted = false,
     revision = 1;
-  const ctx = {
-    storage: { get: async () => undefined, set: async () => {} },
+  const ctx: ObserverContext = {
+    storage: memoryStorage(),
     session: {
       active: async () => ({ data: { newchild: { type: 'running' } } }),
       list: async () => ({ data: [], cursor: {} }),
-      get: async ({ sessionID }) => ({
+      get: async ({ sessionID }: { sessionID: string }) => ({
         data: {
           id: sessionID,
           parentID: 'idle-parent',
@@ -122,7 +144,8 @@ test('JSON event discovers a child between catalog polls and subscription closes
     },
     event: {
       async *subscribe({ signal }) {
-        const value = await new Promise((resolve) => {
+        assert.ok(signal);
+        const value = await new Promise<string | null>((resolve) => {
           deliver = resolve;
           signal.addEventListener('abort', () => resolve(null), { once: true });
         });
@@ -144,6 +167,7 @@ test('JSON event discovers a child between catalog polls and subscription closes
   try {
     await observer.refresh();
     revision++;
+    assert.ok(deliver);
     deliver(
       JSON.stringify({
         type: 'session.created',
@@ -172,11 +196,11 @@ test('discovery follows seven cursor pages with at most four concurrent reads', 
   let pages = 0,
     reads = 0,
     maxReads = 0;
-  const ctx = {
-    storage: { get: async () => undefined, set: async () => {} },
+  const ctx: ObserverContext = {
+    storage: memoryStorage(),
     session: {
       active: async () => ({ data: {} }),
-      list: async ({ cursor }) => {
+      list: async ({ cursor }: { cursor?: string }) => {
         const page = Number(cursor || 0);
         pages++;
         return {
@@ -184,7 +208,7 @@ test('discovery follows seven cursor pages with at most four concurrent reads', 
           cursor: { next: page < 6 ? String(page + 1) : undefined },
         };
       },
-      get: async ({ sessionID }) => {
+      get: async ({ sessionID }: { sessionID: string }) => {
         reads++;
         maxReads = Math.max(maxReads, reads);
         await Promise.resolve();
@@ -204,6 +228,7 @@ test('discovery follows seven cursor pages with at most four concurrent reads', 
     },
     event: {
       async *subscribe({ signal }) {
+        assert.ok(signal);
         await new Promise((resolve) =>
           signal.addEventListener('abort', resolve, { once: true }),
         );

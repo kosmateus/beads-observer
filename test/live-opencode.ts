@@ -8,6 +8,34 @@ import assert from 'node:assert/strict';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+interface LiveSession {
+  id: string;
+  title: string;
+}
+interface LiveDiff {
+  file: string;
+  patch: string;
+}
+interface LiveRecord {
+  connected: boolean;
+  sessionID: string;
+  status: string;
+  parentSessionID?: string;
+  activeIssueId?: string;
+  warnings: string[];
+  issueIds: string[];
+  projectId: string;
+  diffs: LiveDiff[];
+}
+interface LiveMessage {
+  type: string;
+  content: { name?: string; state: { input: { background?: boolean } } }[];
+}
+interface LiveEvent {
+  type: string;
+  data: { sessionID: string };
+}
+
 const root = process.env.LIVE_ROOT || '/tmp/opencode/observer-live-test';
 const base = process.env.LIVE_URL || 'http://127.0.0.1:44328';
 const hub =
@@ -18,8 +46,8 @@ const tasks = (process.env.LIVE_TASKS || 'live-3rg,live-39o,live-7yn').split(
 );
 assert(process.env.LIVE_PASSWORD, 'Set LIVE_PASSWORD for your private server');
 assert(['127.0.0.1', 'localhost', '[::1]'].includes(new URL(base).hostname));
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-async function api(path, body) {
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+async function api<T = unknown>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(base + path, {
     method: body === undefined ? 'GET' : 'POST',
     headers: {
@@ -32,18 +60,24 @@ async function api(path, body) {
   });
   const text = await response.text();
   assert(response.ok, response.status + ' ' + path + ': ' + text);
-  return text ? JSON.parse(text) : null;
+  return JSON.parse(text || 'null') as T;
 }
 async function records() {
   const files = (await readdir(hub)).filter(
     (x) => x.startsWith('session-') && x.endsWith('.json'),
   );
   const all = await Promise.all(
-    files.map(async (x) => JSON.parse(await readFile(join(hub, x), 'utf8'))),
+    files.map(async (x): Promise<LiveRecord> =>
+      JSON.parse(await readFile(join(hub, x), 'utf8')),
+    ),
   );
   return all.filter((x) => x.connected);
 }
-async function until(label, predicate, timeout = 45000) {
+async function until<T>(
+  label: string,
+  predicate: () => Promise<T | false>,
+  timeout = 45000,
+): Promise<T> {
   const start = Date.now();
   while (Date.now() - start < timeout) {
     const result = await predicate();
@@ -55,10 +89,16 @@ async function until(label, predicate, timeout = 45000) {
   }
   throw Error('Timed out: ' + label);
 }
-const create = async (directory, title) =>
-  (await api('/api/session', { location: { directory }, title })).data;
-const prompt = (id, text) => api(`/api/session/${id}/prompt`, { text });
-const info = await api('/api/info');
+const create = async (directory: string, title: string) =>
+  (
+    await api<{ data: LiveSession }>('/api/session', {
+      location: { directory },
+      title,
+    })
+  ).data;
+const prompt = (id: string, text: string) =>
+  api(`/api/session/${id}/prompt`, { text });
+const info = await api<{ version: string; pid: number }>('/api/info');
 assert.equal(info.version, '2.1.3');
 const parent = await create(
   join(root, 'project'),
@@ -66,7 +106,9 @@ const parent = await create(
 );
 await prompt(parent.id, `Work only on ${tasks[0]}. SPAWN_CHILDREN`);
 const probe = await until('private plugin loaded', async () => {
-  const value = JSON.parse(await readFile(join(root, 'context.json'), 'utf8'));
+  const value: { pid: number; sessionKeys: string[] } = JSON.parse(
+    await readFile(join(root, 'context.json'), 'utf8'),
+  );
   return value.pid === info.pid && value;
 });
 assert(!probe.sessionKeys.includes('active'));
@@ -77,8 +119,12 @@ console.log(
 const children = await until(
   'three actual background children with idle parent',
   async () => {
-    const active = (await api('/api/session/active')).data;
-    const children = (await api('/api/session?parentID=' + parent.id)).data;
+    const active = (
+      await api<{ data: Record<string, unknown> }>('/api/session/active')
+    ).data;
+    const children = (
+      await api<{ data: LiveSession[] }>('/api/session?parentID=' + parent.id)
+    ).data;
     return (
       children.length === 3 &&
       !active[parent.id] &&
@@ -87,7 +133,11 @@ const children = await until(
     );
   },
 );
-const taskFor = (child) => tasks[{ A: 1, B: 2, C: 0 }[child.title.at(-1)]];
+const taskFor = (child: LiveSession) => {
+  const suffix = child.title.at(-1);
+  assert(suffix === 'A' || suffix === 'B' || suffix === 'C');
+  return tasks[{ A: 1, B: 2, C: 0 }[suffix]];
+};
 await until('all children linked to their own tasks, no warnings', async () => {
   const all = await records();
   return children.every((child) =>
@@ -102,9 +152,13 @@ await until('all children linked to their own tasks, no warnings', async () => {
   );
 });
 const childB = children.find((x) => x.title.endsWith('B'));
+assert.ok(childB);
 assert.equal(
-  (await api(`/api/session/${childB.id}/interrupt`, { resume: false }))
-    .interrupted,
+  (
+    await api<{ interrupted: boolean }>(`/api/session/${childB.id}/interrupt`, {
+      resume: false,
+    })
+  ).interrupted,
   true,
 );
 await until('interrupt clears running state', async () =>
@@ -142,17 +196,21 @@ await until('natural completion of remaining children', async () => {
       all.some((r) => r.sessionID === c.id && r.status === 'succeeded'),
     );
 });
-const all = await records(),
-  projectID = all.find((r) => r.sessionID === parent.id).projectId;
+const all = await records();
+const parentRecord = all.find((r) => r.sessionID === parent.id);
+assert.ok(parentRecord);
+const projectID = parentRecord.projectId;
 assert(
   !all.some((r) => r.sessionID === foreign.id && r.projectId === projectID),
 );
-assert.equal(all.find((r) => r.sessionID === wt.id).projectId, projectID);
+assert.equal(all.find((r) => r.sessionID === wt.id)?.projectId, projectID);
 console.log(
   'PASS other project excluded; shared worktree has same Observer project',
 );
-const context = await api(`/api/session/${parent.id}/context`);
-const get = await api(`/api/session/${parent.id}`);
+const context = await api<{ data: LiveMessage[] }>(
+  `/api/session/${parent.id}/context`,
+);
+const get = await api<{ data: LiveSession }>(`/api/session/${parent.id}`);
 assert(Array.isArray(context.data));
 assert.equal(get.data.id, parent.id);
 assert(
@@ -180,13 +238,15 @@ await until('real model tool call creates nonempty snapshot diff', async () => {
     )
   );
 });
-const directDiff = await api(`/api/session/${diffSession.id}/diff?context=3`);
+const directDiff = await api<{ data: LiveDiff[] }>(
+  `/api/session/${diffSession.id}/diff?context=3`,
+);
 assert(directDiff.data.some((d) => d.file.endsWith('live-diff.txt')));
 console.log('PASS HTTP diff fallback agrees with Observer record');
 const events = (await readFile(join(root, 'events.jsonl'), 'utf8'))
   .trim()
   .split('\n')
-  .map((line) => {
+  .map((line): LiveEvent => {
     const event = JSON.parse(line);
     return typeof event === 'string' ? JSON.parse(event) : event;
   });

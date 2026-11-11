@@ -4,7 +4,10 @@ import { readFile } from 'node:fs/promises';
 import { catalogs } from '../web/catalogs.js';
 
 test('OpenCode sessions follow status timing in the activity selector', async () => {
-  const app = await readFile(new URL('../web/app.js', import.meta.url), 'utf8');
+  const app = await readFile(
+    new URL('../../web/app.ts', import.meta.url),
+    'utf8',
+  );
   assert.match(
     app,
     /\[['"]timing['"],\s*t\(['"]statusTiming['"]\)\],\s*\[['"]sessions['"],\s*t\(['"]openCodeSessions['"]\)\]/,
@@ -19,7 +22,7 @@ test('OpenCode sessions follow status timing in the activity selector', async ()
   );
   assert.match(
     app,
-    /const logs\s*=\s*root\.querySelector\('#issue-pane-sessions'\)/,
+    /const logs\s*(?::[^=]+)?=\s*root\.querySelector(?:<[^>]+>)?\('#issue-pane-sessions'\)/,
   );
   assert.doesNotMatch(app, /root\.append\(logs\)/);
   assert.equal(catalogs.pl.openCodeSessions, 'Sesje OpenCode');

@@ -1,4 +1,5 @@
 import { analyzeCommits as conventional } from '@semantic-release/commit-analyzer';
+import type { AnalyzeCommitsContext } from 'semantic-release';
 
 const releaseRank = {
   patch: 1,
@@ -6,10 +7,18 @@ const releaseRank = {
   major: 3,
 };
 
-export async function analyzeCommits(_config, context) {
+export async function analyzeCommits(
+  _config: unknown,
+  context: AnalyzeCommitsContext,
+) {
   const requested = process.env.RELEASE_TYPE || 'auto';
 
-  if (requested !== 'auto' && !(requested in releaseRank)) {
+  if (
+    requested !== 'auto' &&
+    requested !== 'patch' &&
+    requested !== 'minor' &&
+    requested !== 'major'
+  ) {
     throw new Error(
       `Invalid RELEASE_TYPE "${requested}". Use auto, patch, minor or major.`,
     );

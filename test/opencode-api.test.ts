@@ -29,14 +29,16 @@ test('HTTP fallback uses only the registered owner', async () => {
       ),
     );
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
+    const address = server.address();
+    assert.ok(address && typeof address !== 'string');
     await mkdir(join(dir, 'opencode'));
     await writeFile(
       join(dir, 'opencode/service.json'),
       JSON.stringify({
         pid: 123,
-        url: `http://127.0.0.1:${server.address().port}`,
+        url: `http://127.0.0.1:${address.port}`,
         password: 'test-password',
       }),
     );
@@ -68,7 +70,9 @@ test('HTTP fallback uses only the registered owner', async () => {
       });
     }
   } finally {
-    await new Promise((resolve) => server.close(resolve));
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
     await rm(dir, { recursive: true, force: true });
   }
 });
