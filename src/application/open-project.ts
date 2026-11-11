@@ -1,9 +1,24 @@
 /** Command use case, independent of OpenCode and the operating system. */
-export function projectCommand({ location, url, projectId, open, bind }) {
+export interface ProjectCommandOptions {
+  location: () => Promise<unknown>;
+  url: string;
+  projectId: string;
+  open: (url: string) => Promise<unknown>;
+  bind?: (sessionID: string, issueId: string) => Promise<unknown>;
+}
+export function projectCommand({
+  location,
+  url,
+  projectId,
+  open,
+  bind,
+}: ProjectCommandOptions) {
   return {
     name: 'beads-observer',
     description: 'Open the Beads board for this project',
-    async execute(input = {}) {
+    async execute(
+      input: { prompt?: { text?: string }; sessionID?: string } = {},
+    ) {
       await location(); // Resolve Beads before opening; missing databases must never select another project.
       const issueId = input.prompt?.text?.trim();
       if (issueId) {

@@ -1,11 +1,23 @@
 import { randomUUID } from 'node:crypto';
+import type { Projects } from './projects.js';
+import { record } from '../types.js';
 /** Two-step, expiring confirmation bound to the concrete project and database. */
 export class ResetProject {
-  #tickets = new Map();
-  constructor(projects) {
+  #tickets = new Map<
+    string,
+    {
+      projectId: string;
+      path: string;
+      identity: string;
+      mode: string;
+      expires: number;
+    }
+  >();
+  projects: Projects;
+  constructor(projects: Projects) {
     this.projects = projects;
   }
-  async prepare(projectId) {
+  async prepare(projectId: string) {
     const entry = this.projects.get(projectId);
     if (!entry.writer?.resetPreview)
       throw Object.assign(Error('Reset unavailable'), { status: 403 });
@@ -22,8 +34,10 @@ export class ResetProject {
     });
     return { ...preview, token, project: entry.name, projectPath: entry.cwd };
   }
-  async execute(projectId, input) {
-    const ticket = this.#tickets.get(input?.token);
+  async execute(projectId: string, value: unknown) {
+    const input = record(value);
+    const token = typeof input.token === 'string' ? input.token : '';
+    const ticket = this.#tickets.get(token);
     if (
       input?.confirmation !== 'delete' ||
       !ticket ||
@@ -35,8 +49,8 @@ export class ResetProject {
         { status: 400 },
       );
     const entry = this.projects.get(projectId);
-    this.#tickets.delete(input.token);
-    await entry.writer.reset(ticket.path, ticket.identity, ticket.mode);
+    this.#tickets.delete(token);
+    await entry.writer!.reset!(ticket.path, ticket.identity, ticket.mode);
     entry.observer.clear();
     return { reset: true };
   }

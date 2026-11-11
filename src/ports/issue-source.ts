@@ -5,7 +5,8 @@
  * @property {() => Promise<{issues: Object[], edges: Object[]}>} snapshot
  * @property {(id: string) => Promise<Object>} detail
  */
-export function assertIssueSource(source) {
+import type { IssueSource } from '../types.js';
+export function assertIssueSource(source: IssueSource): IssueSource {
   if (
     !source ||
     typeof source.snapshot !== 'function' ||

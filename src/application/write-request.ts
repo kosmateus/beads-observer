@@ -1,12 +1,25 @@
 /** Idempotent project-scoped mutation coordinator; adapters implement explicit write methods. */
-export class WriteRequest {
-  constructor(projects, { validate, method }) {
+import type { Projects } from './projects.js';
+import type { Draft, Update, Relation } from '../types.js';
+type Inputs = { create: Draft; update: Update; addRelation: Relation };
+export class WriteRequest<K extends keyof Inputs> {
+  validate: (input: unknown) => Inputs[K];
+  method: K;
+  projects: Projects;
+  requests: Map<string, { fingerprint: string; result: Promise<unknown> }>;
+  constructor(
+    projects: Projects,
+    {
+      validate,
+      method,
+    }: { validate: (input: unknown) => Inputs[K]; method: K },
+  ) {
     this.validate = validate;
     this.method = method;
     this.projects = projects;
     this.requests = new Map();
   }
-  async execute(projectId, requestId, input) {
+  async execute(projectId: string, requestId: unknown, input: unknown) {
     const draft = this.validate(input);
     if (
       typeof requestId !== 'string' ||
@@ -35,7 +48,10 @@ export class WriteRequest {
         { status: 429 },
       );
     const result = (async () => {
-      const issue = await project.writer[this.method](draft);
+      const write = project.writer![this.method] as (
+        input: Inputs[K],
+      ) => Promise<unknown>;
+      const issue = await write.call(project.writer, draft);
       await project.observer.refresh();
       return issue;
     })();

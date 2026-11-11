@@ -1,5 +1,7 @@
 import { join, dirname } from 'node:path';
 import { realpath } from 'node:fs/promises';
+import type { CanonicalProject, LeaseResult } from '../types.js';
+import { errorInfo } from '../types.js';
 import {
   startServer,
   canonicalProject,
@@ -18,6 +20,11 @@ export async function runDaemon({
   directory,
   scanMs = 1000,
   idleMs = 10000,
+}: {
+  port: number;
+  directory: string;
+  scanMs?: number;
+  idleMs?: number;
 }) {
   const expected = await hubDirectory(port, dirname(directory));
   if ((await realpath(expected)) !== (await realpath(directory)))
@@ -29,9 +36,9 @@ export async function runDaemon({
     runtimeId: runtimeIdentity(directory),
   });
   let stopped = false,
-    timer,
-    idleSince = null;
-  const results = new Map();
+    timer: ReturnType<typeof setTimeout> | undefined,
+    idleSince: number | null = null;
+  const results = new Map<string, string>();
   const close = async () => {
     if (stopped) return;
     stopped = true;
@@ -41,9 +48,12 @@ export async function runDaemon({
   async function scan() {
     try {
       const leases = await readLeases(directory),
-        wanted = new Set(),
-        groups = new Map();
-      const outcomes = new Map(
+        wanted = new Set<string>(),
+        groups = new Map<
+          string,
+          { config: CanonicalProject; file: string; signature: string }[]
+        >();
+      const outcomes = new Map<string, LeaseResult>(
         leases.map((lease) => [lease.file, { projectIds: [], errors: [] }]),
       );
       for (const lease of leases)
@@ -58,7 +68,7 @@ export async function runDaemon({
             });
             groups.set(config.id, entries);
           } catch (error) {
-            outcomes.get(lease.file).errors.push(error.message);
+            outcomes.get(lease.file)!.errors.push(errorInfo(error).message);
           }
         }
       for (const [id, entries] of groups) {
@@ -66,7 +76,7 @@ export async function runDaemon({
         if (new Set(entries.map((entry) => entry.signature)).size > 1) {
           for (const entry of entries)
             outcomes
-              .get(entry.file)
+              .get(entry.file)!
               .errors.push(`Conflicting options for ${entry.config.cwd}`);
           continue;
         }
@@ -76,17 +86,21 @@ export async function runDaemon({
               ...entries[0].config,
               hostVersions: [
                 ...new Set(
-                  entries.map((e) => e.config.opencodeVersion).filter(Boolean),
+                  entries
+                    .map((e) => e.config.opencodeVersion)
+                    .filter(
+                      (value): value is string => typeof value === 'string',
+                    ),
                 ),
               ].sort(),
             },
             { replace: true },
           );
           for (const entry of entries)
-            outcomes.get(entry.file).projectIds.push(id);
+            outcomes.get(entry.file)!.projectIds.push(id);
         } catch (error) {
           for (const entry of entries)
-            outcomes.get(entry.file).errors.push(error.message);
+            outcomes.get(entry.file)!.errors.push(errorInfo(error).message);
         }
       }
       for (const [file, result] of outcomes) {
@@ -109,7 +123,7 @@ export async function runDaemon({
         }
       } else idleSince = null;
     } catch (error) {
-      console.error('[beads.observer]', error.message);
+      console.error('[beads.observer]', errorInfo(error).message);
     }
     if (!stopped) {
       timer = setTimeout(scan, scanMs);
@@ -135,7 +149,7 @@ if (
         process.exit(0);
       });
   } catch (error) {
-    console.error(error.message);
+    console.error(errorInfo(error).message);
     process.exitCode = 1;
   }
 }

@@ -9,12 +9,35 @@ import { createServer } from 'node:http';
 import { readFile, readdir, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join } from 'node:path';
+import type { ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import type { Projects } from '../application/projects.js';
+import { errorInfo } from '../types.js';
+interface BridgeRecord {
+  projectId: string;
+  updatedAt: number;
+  connected?: boolean;
+  activityAvailable?: boolean;
+  warnings?: unknown[];
+}
+interface EventClient {
+  res: ServerResponse;
+  projectId?: string;
+  catalog: boolean;
+  revision: string | null;
+  waiting?: boolean;
+  pending?: { event: string; data: unknown } | null;
+}
 
-export async function readActivityAvailability(directory, projectId) {
-  const bridges = [],
+export async function readActivityAvailability(
+  directory: string | undefined,
+  projectId: string,
+) {
+  const bridges: BridgeRecord[] = [],
     now = Date.now();
   let files;
   try {
+    if (!directory) return { available: false, warnings: [] };
     files = await readdir(directory);
   } catch {
     return { available: false, warnings: [] };
@@ -31,7 +54,7 @@ export async function readActivityAvailability(directory, projectId) {
       );
       const stat = await handle.stat();
       if (!stat.isFile() || stat.size > 65536) continue;
-      const record = JSON.parse(await handle.readFile('utf8'));
+      const record: BridgeRecord = JSON.parse(await handle.readFile('utf8'));
       if (
         record.projectId !== projectId ||
         !Number.isFinite(record.updatedAt) ||
@@ -56,14 +79,16 @@ export async function readActivityAvailability(directory, projectId) {
       ...new Set(
         bridges.flatMap((record) =>
           Array.isArray(record.warnings)
-            ? record.warnings.filter((warning) => typeof warning === 'string')
+            ? record.warnings.filter(
+                (warning): warning is string => typeof warning === 'string',
+              )
             : [],
         ),
       ),
     ],
   };
 }
-const assets = new Map([
+const assets = new Map<string, string[]>([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ...[
     'app',
@@ -80,24 +105,34 @@ const assets = new Map([
     'select',
     'types',
     'epics',
-  ].map((name) => [
+  ].map((name): [string, string[]] => [
     `/${name}.js`,
     [`${name}.js`, 'text/javascript; charset=utf-8'],
   ]),
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
 ]);
 export async function listenHttp(
-  projects,
-  { port, runtimeId, protocol, sessionDirectory },
+  projects: Projects,
+  {
+    port,
+    runtimeId,
+    protocol,
+    sessionDirectory,
+  }: {
+    port: number;
+    runtimeId: string;
+    protocol: number;
+    sessionDirectory?: string;
+  },
 ) {
-  const clients = new Set();
+  const clients = new Set<EventClient>();
   const resetProject = new ResetProject(projects);
   const addRelation = new AddRelation(projects);
   const updateIssue = new UpdateIssue(projects);
   const createIssue = new CreateIssue(projects),
     csrfToken = randomBytes(32).toString('hex');
-  let actualPort;
-  function send(client, event, data) {
+  let actualPort!: number;
+  function send(client: EventClient, event: string, data: unknown) {
     if (client.res.destroyed || client.res.writableEnded) return;
     // write(false) means accepted but buffered, not failed. Keep only the newest
     // unsent snapshot while the socket drains so slow readers cannot grow a queue.
@@ -125,7 +160,7 @@ export async function listenHttp(
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'",
     );
     if (
-      !allowed.includes(req.headers.host) ||
+      !allowed.includes(req.headers.host || '') ||
       (req.headers.origin &&
         !allowed.map((host) => 'http://' + host).includes(req.headers.origin))
     ) {
@@ -134,7 +169,7 @@ export async function listenHttp(
       return;
     }
     try {
-      const url = new URL(req.url, 'http://localhost');
+      const url = new URL(req.url || '/', 'http://localhost');
       if (
         req.method === 'POST' &&
         /^\/api\/projects\/[^/]+\/(issues|relations|updates|reset-preview|reset)$/.test(
@@ -192,7 +227,7 @@ export async function listenHttp(
         res.end(JSON.stringify(result));
         return;
       }
-      if (!['GET', 'HEAD'].includes(req.method)) {
+      if (!['GET', 'HEAD'].includes(req.method || '')) {
         res.writeHead(405, { Allow: 'GET, HEAD' });
         res.end('Method not allowed');
         return;
@@ -211,7 +246,10 @@ export async function listenHttp(
           const sessions = availability.available
             ? await readSessionRecords(sessionDirectory, project.id)
             : [];
-          const activity = {};
+          const activity: Record<
+            string,
+            { agent?: string; sessionID: string }[]
+          > = {};
           for (const session of sessions)
             if (
               session.connected &&
@@ -266,17 +304,14 @@ export async function listenHttp(
         const initial = catalog
           ? projects.list()
           : projects.snapshot(projectId);
-        const client = {
+        const state = catalog ? null : projects.snapshot(projectId);
+        const client: EventClient = {
           res,
           projectId,
           catalog,
           revision: catalog
             ? null
-            : JSON.stringify([
-                initial.revision,
-                initial.error,
-                initial.updatedAt,
-              ]),
+            : JSON.stringify([state!.revision, state!.error, state!.updatedAt]),
         };
         clients.add(client);
         send(client, '', initial);
@@ -324,7 +359,7 @@ export async function listenHttp(
         type = 'text/html; charset=utf-8';
         body = await readFile(new URL('../../web/index.html', import.meta.url));
       } else if (assets.has(url.pathname)) {
-        const asset = assets.get(url.pathname);
+        const asset = assets.get(url.pathname)!;
         type = asset[1];
         body = await readFile(
           new URL(`../../web/${asset[0]}`, import.meta.url),
@@ -336,17 +371,18 @@ export async function listenHttp(
       }
       res.writeHead(200, { 'Content-Type': type });
       res.end(req.method === 'HEAD' ? undefined : body);
-    } catch (error) {
+    } catch (caught) {
+      const error = errorInfo(caught);
       res.writeHead(error.status || 502, {
         'Content-Type': 'application/json',
       });
       res.end(JSON.stringify({ error: String(error.message) }));
     }
   });
-  await new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, '127.0.0.1', () => {
-      actualPort = server.address().port;
+      actualPort = (server.address() as AddressInfo).port;
       resolve();
     });
   });
@@ -386,7 +422,7 @@ export async function listenHttp(
       clearInterval(heartbeat);
       unsubscribe();
       for (const client of clients) client.res.end();
-      await new Promise((resolve) => server.close(resolve));
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };
 }

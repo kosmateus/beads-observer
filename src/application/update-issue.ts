@@ -1,6 +1,9 @@
 import { WriteRequest } from './write-request.js';
 import { validateDraft } from './create-issue.js';
-export function validateUpdate(input) {
+import { record } from '../types.js';
+import type { Projects } from './projects.js';
+export function validateUpdate(value: unknown) {
+  const input = record(value);
   if (
     !input ||
     Object.keys(input).some(
@@ -27,8 +30,8 @@ export function validateUpdate(input) {
     priority: draft.priority,
   };
 }
-export class UpdateIssue extends WriteRequest {
-  constructor(projects) {
+export class UpdateIssue extends WriteRequest<'update'> {
+  constructor(projects: Projects) {
     super(projects, { validate: validateUpdate, method: 'update' });
   }
 }

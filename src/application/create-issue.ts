@@ -1,13 +1,16 @@
 import { WriteRequest } from './write-request.js';
+import type { Draft } from '../types.js';
+import type { Projects } from './projects.js';
+import { record } from '../types.js';
 /** Explicit create use case. Read paths never call the writer. */
-export function validateDraft(input) {
-  const invalid = (message) => {
-    const error = new Error(message);
-    error.status = 400;
+export function validateDraft(value: unknown): Draft {
+  const invalid = (message: string): never => {
+    const error = Object.assign(new Error(message), { status: 400 });
     throw error;
   };
-  if (!input || typeof input !== 'object' || Array.isArray(input))
+  if (!value || typeof value !== 'object' || Array.isArray(value))
     invalid('Invalid issue');
+  const input = record(value);
   if (
     Object.keys(input).some(
       (key) =>
@@ -29,6 +32,7 @@ export function validateDraft(input) {
   )
     invalid('Description must be at most 20000 characters');
   if (
+    typeof input.type !== 'string' ||
     ![
       'bug',
       'feature',
@@ -44,8 +48,8 @@ export function validateDraft(input) {
     invalid('Unsupported issue type');
   if (
     !Number.isInteger(input.priority) ||
-    input.priority < 0 ||
-    input.priority > 4
+    Number(input.priority) < 0 ||
+    Number(input.priority) > 4
   )
     invalid('Priority must be 0–4');
   if (
@@ -54,10 +58,17 @@ export function validateDraft(input) {
       !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/.test(input.parent))
   )
     invalid('Invalid parent ID');
-  return { ...input, title: input.title.trim(), parent: input.parent || '' };
+  return {
+    ...input,
+    title: (input.title as string).trim(),
+    description: input.description as string,
+    type: input.type as string,
+    priority: input.priority as number,
+    parent: (input.parent || '') as string,
+  };
 }
-export class CreateIssue extends WriteRequest {
-  constructor(projects) {
+export class CreateIssue extends WriteRequest<'create'> {
+  constructor(projects: Projects) {
     super(projects, { validate: validateDraft, method: 'create' });
   }
 }

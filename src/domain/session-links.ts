@@ -1,5 +1,6 @@
 /** Conservative evidence extraction. Only IDs in the current Beads workspace count. */
-export function mentionedIssues(text, known) {
+import type { SessionMessage, SessionLink } from '../types.js';
+export function mentionedIssues(text: unknown, known: ReadonlySet<string>) {
   const tokens = String(text || '').match(/[A-Za-z0-9][A-Za-z0-9_.-]*/g) || [];
   return [
     ...new Set(
@@ -11,7 +12,7 @@ export function mentionedIssues(text, known) {
 }
 // Tokenize shell syntax without splitting quoted descriptions into fake commands.
 // Dynamic expansion and here-documents are deliberately not interpreted.
-function shellCommands(command) {
+function shellCommands(command: unknown) {
   if (
     typeof command !== 'string' ||
     command.includes('<<') ||
@@ -19,11 +20,11 @@ function shellCommands(command) {
     command.includes('`')
   )
     return [];
-  const commands = [];
-  let tokens = [],
+  const commands: string[][] = [];
+  let tokens: string[] = [],
     token = '',
     started = false,
-    quote = null;
+    quote: string | null = null;
   const word = () => {
     if (started) tokens.push(token);
     token = '';
@@ -91,7 +92,7 @@ const booleanFlags = new Set([
   '--no-auto-flush',
   '--no-auto-import',
 ]);
-function commandEvidence(command, known) {
+function commandEvidence(command: unknown, known: ReadonlySet<string>) {
   for (const clean of shellCommands(command).reverse()) {
     let index = 0;
     while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(clean[index] || '')) index++;
@@ -125,9 +126,9 @@ function commandEvidence(command, known) {
 }
 // A small lexical scanner, not eval: only literal command properties of actual
 // tools.shell({...}) / tools["shell"]({...}) calls count in Code Mode input.
-function executeCommands(code) {
+function executeCommands(code: unknown) {
   if (typeof code !== 'string') return [];
-  const tokens = [];
+  const tokens: { value: string | null; literal: boolean }[] = [];
   const pattern =
     /\s+|\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[A-Za-z_$][\w$]*|[^\s]/g;
   for (const match of code.matchAll(pattern)) {
@@ -143,7 +144,8 @@ function executeCommands(code) {
         .replace(/\\(u[\da-fA-F]{4}|x[\da-fA-F]{2}|[\s\S])/g, (_, c) =>
           c[0] === 'u' || c[0] === 'x'
             ? String.fromCharCode(parseInt(c.slice(1), 16))
-            : ({ n: '\n', r: '\r', t: '\t' }[c] ?? c),
+            : (({ n: '\n', r: '\r', t: '\t' } as Record<string, string>)[c] ??
+              c),
         );
       tokens.push({ value, literal: true });
     } else tokens.push({ value: text, literal: false });
@@ -172,22 +174,25 @@ function executeCommands(code) {
     let depth = 1;
     for (let k = j + 2; k < tokens.length && depth; k++) {
       const t = tokens[k];
-      if (!t.literal && ['{', '[', '('].includes(t.value)) depth++;
-      if (!t.literal && ['}', ']', ')'].includes(t.value)) depth--;
+      if (!t.literal && ['{', '[', '('].includes(t.value ?? '')) depth++;
+      if (!t.literal && ['}', ']', ')'].includes(t.value ?? '')) depth--;
       if (
         depth === 1 &&
         t.value === 'command' &&
         tokens[k + 1]?.value === ':' &&
         tokens[k + 2]?.literal &&
-        [',', '}'].includes(tokens[k + 3]?.value) &&
+        [',', '}'].includes(tokens[k + 3]?.value ?? '') &&
         typeof tokens[k + 2].value === 'string'
       )
-        commands.push(tokens[k + 2].value);
+        commands.push(tokens[k + 2].value as string);
     }
   }
   return commands;
 }
-export function directSessionLink(messages, known) {
+export function directSessionLink(
+  messages: SessionMessage[],
+  known: ReadonlySet<string>,
+) {
   for (const message of [...messages].reverse()) {
     if (message.type === 'assistant')
       for (const part of [...(message.content || [])].reverse()) {
@@ -208,8 +213,8 @@ export function directSessionLink(messages, known) {
         if (/(?:^|[_.:-])(?:beads|bd)(?:[_.:-]|$)/i.test(part.name || '')) {
           const ids = [
             ...new Set(
-              [input?.issue_id, input?.issueId, input?.id].filter((id) =>
-                known.has(id),
+              [input?.issue_id, input?.issueId, input?.id].filter(
+                (id): id is string => typeof id === 'string' && known.has(id),
               ),
             ),
           ];
@@ -229,14 +234,14 @@ export function directSessionLink(messages, known) {
 }
 /** A parent relationship alone says nothing about a child's assigned task. */
 export function resolveSessionLinks(
-  sessions,
-  known,
-  manual,
-  remembered = new Map(),
+  sessions: ReadonlyMap<string, { messages: SessionMessage[] } | null>,
+  known: ReadonlySet<string>,
+  manual: ReadonlyMap<string, string[]>,
+  remembered: ReadonlyMap<string, SessionLink> = new Map(),
 ) {
-  const result = new Map();
+  const result = new Map<string, SessionLink | null>();
   for (const [id, session] of sessions) {
-    let link = null;
+    let link: SessionLink | null = null;
     const explicit = manual.get(id);
     if (explicit?.length) link = { issueId: explicit.at(-1), source: 'manual' };
     else if (session) {
@@ -251,7 +256,9 @@ export function resolveSessionLinks(
     if (
       !link &&
       session &&
-      ['prompt', 'beads-command', 'beads-tool'].includes(saved?.source) &&
+      saved &&
+      ['prompt', 'beads-command', 'beads-tool'].includes(saved.source) &&
+      saved.issueId &&
       known.has(saved.issueId)
     )
       link = saved;

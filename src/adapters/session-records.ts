@@ -1,9 +1,17 @@
 import { readdir, lstat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-const recordCache = new Map();
-export async function readSessionRecords(directory, projectId, issueId) {
+import type { SessionRecord } from '../types.js';
+const recordCache = new Map<
+  string,
+  { signature: string; record: SessionRecord }
+>();
+export async function readSessionRecords(
+  directory: string | undefined,
+  projectId: string,
+  issueId?: string | null,
+) {
   if (!directory) return [];
-  const latest = new Map(),
+  const latest = new Map<string, SessionRecord>(),
     now = Date.now();
   let files;
   try {
@@ -27,13 +35,13 @@ export async function readSessionRecords(directory, projectId, issueId) {
         continue;
       const cached = recordCache.get(path);
       const signature = String(stat.mtimeMs) + ':' + stat.size;
-      const record =
+      const record: SessionRecord =
         cached?.signature === signature
           ? cached.record
           : JSON.parse(await readFile(path, 'utf8'));
       recordCache.set(path, { signature, record });
       if (recordCache.size > 512)
-        recordCache.delete(recordCache.keys().next().value);
+        recordCache.delete(recordCache.keys().next().value!);
       if (
         record.projectId !== projectId ||
         typeof record.sessionID !== 'string' ||
@@ -54,7 +62,8 @@ export async function readSessionRecords(directory, projectId, issueId) {
     .filter(
       (record) =>
         issueId === undefined ||
-        (Array.isArray(record.issueIds) && record.issueIds.includes(issueId)),
+        (Array.isArray(record.issueIds) &&
+          record.issueIds.includes(issueId as string)),
     )
     .map((record) => {
       const connected =

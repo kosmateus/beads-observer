@@ -1,6 +1,7 @@
 import { statusTimeline } from '../domain/status-timeline.js';
 import { normalize } from '../domain/model.js';
-export function demoIssues() {
+import type { Issue, Dependency, StatusEvent, Draft } from '../types.js';
+export function demoIssues(): Issue[] {
   const titles = [
     'Platforma agentów · wydanie 2.0',
     'Kontrakt API i schemat danych',
@@ -33,7 +34,7 @@ export function demoIssues() {
     'open',
     'closed',
   ];
-  const deps = {
+  const deps: Record<number, number[]> = {
     2: [1],
     3: [2],
     4: [2],
@@ -109,6 +110,10 @@ export function demoIssues() {
   }));
 }
 export class DemoSource {
+  issues: Issue[];
+  step: number;
+  tick: number;
+  events: Map<string, StatusEvent[]>;
   constructor() {
     this.issues = demoIssues();
     this.step = 0;
@@ -167,7 +172,7 @@ export class DemoSource {
     }
     for (const issue of this.issues)
       if (previous.get(issue.id) !== issue.status) {
-        this.events.get(issue.id).push({
+        this.events.get(issue.id)!.push({
           id: issue.id + '-' + Date.now(),
           event_type: 'status_changed',
           new_value: JSON.stringify({ status: issue.status }),
@@ -183,7 +188,7 @@ export class DemoSource {
     );
     return normalize(structuredClone(this.issues), ready, blocked);
   }
-  blockers(x, seen = new Set()) {
+  blockers(x: Issue, seen = new Set<string>()): Dependency[] {
     if (seen.has(x.id)) return [];
     seen.add(x.id);
     const direct = x.dependencies.filter(
@@ -199,13 +204,13 @@ export class DemoSource {
       });
     return [...direct, ...inherited];
   }
-  async create(draft) {
+  async create(draft: Draft) {
     if (
       draft.parent &&
       !this.issues.some((x) => x.id === draft.parent && x.issue_type === 'epic')
     )
       throw new Error('Selected parent is not an epic');
-    const issue = {
+    const issue: Issue = {
       id: 'obs-user-' + Date.now().toString(36),
       title: draft.title,
       description: draft.description,
@@ -224,7 +229,7 @@ export class DemoSource {
     this.events.set(issue.id, []);
     return structuredClone(issue);
   }
-  async detail(id) {
+  async detail(id: string) {
     const issue = structuredClone(this.issues.find((x) => x.id === id));
     if (!issue) return issue;
     issue.statusEvents = structuredClone(this.events.get(id));

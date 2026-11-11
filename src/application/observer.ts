@@ -1,15 +1,21 @@
 import { assertIssueSource } from '../ports/issue-source.js';
+import { errorInfo } from '../types.js';
+import type { IssueSource, IssueDetail, ObserverState } from '../types.js';
 /** Application service. Injected source and clock; framework-independent. */
 export class Observer {
-  #source;
-  #details = new Map();
+  #source: IssueSource;
+  #details = new Map<
+    string,
+    { at: number; promise: Promise<IssueDetail | undefined> }
+  >();
   #generation = 0;
-  #listeners = new Set();
-  #pending;
-  #fingerprint;
-  #clock;
+  #listeners = new Set<(state: ObserverState) => void>();
+  #pending: Promise<ObserverState> | null = null;
+  #fingerprint: string | undefined;
+  #clock: () => string;
+  state: ObserverState;
   constructor(
-    source,
+    source: IssueSource,
     {
       clock = () => new Date().toISOString(),
       project = 'Beads',
@@ -45,7 +51,7 @@ export class Observer {
     };
     this.#emit();
   }
-  subscribe(listener) {
+  subscribe(listener: (state: ObserverState) => void) {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
@@ -117,7 +123,8 @@ export class Observer {
         this.state = { ...this.state, error: null, updatedAt: now };
         this.#emit();
       }
-    } catch (error) {
+    } catch (caught) {
+      const error = errorInfo(caught);
       const message =
         error.code === 'ENOENT'
           ? 'Nie znaleziono bd. Zainstaluj Beads lub ustaw bdPath.'
@@ -129,10 +136,11 @@ export class Observer {
     }
     return this.state;
   }
-  async detail(id, activityOnly = false) {
+  async detail(id: string, activityOnly = false) {
     if (!this.state.issues.some((x) => x.id === id)) {
-      const e = new Error('Nie znaleziono zadania');
-      e.status = 404;
+      const e = Object.assign(new Error('Nie znaleziono zadania'), {
+        status: 404,
+      });
       throw e;
     }
     const key = JSON.stringify([this.state.revision, id, activityOnly]);
@@ -151,7 +159,7 @@ export class Observer {
       if (this.#details.get(key) === entry) this.#details.delete(key);
     });
     if (this.#details.size > 250)
-      this.#details.delete(this.#details.keys().next().value);
+      this.#details.delete(this.#details.keys().next().value!);
     return promise;
   }
 }
