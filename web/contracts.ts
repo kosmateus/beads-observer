@@ -115,6 +115,14 @@ export interface SessionBlock {
   id: string;
   kind: string;
   text: string;
+  author?:
+    | 'human'
+    | 'coordinator'
+    | 'agent'
+    | 'delegation'
+    | 'system'
+    | 'synthetic'
+    | 'unknown';
   name?: string;
   status?: string;
   command?: string;

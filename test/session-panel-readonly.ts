@@ -4,12 +4,12 @@ import type { AddressInfo } from 'node:net';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
-import type { Session, SessionResult } from '../web/contracts.js';
+import type { Session, SessionBlock, SessionResult } from '../web/contracts.js';
 
 type FixtureSession = Session & { time?: { created: number; updated: number } };
 type Fixture = Omit<SessionResult, 'sessions'> & { sessions: FixtureSession[] };
 
-const textBlock = (index: number) => ({
+const textBlock = (index: number): SessionBlock => ({
   id: `active-a:user:${index}`,
   kind: 'user',
   author: 'unknown',

@@ -131,22 +131,18 @@ test('session view uses explicit origin metadata and native assistant role for a
 });
 
 test('native assistant type identifies agent output without attributing user messages', () => {
-  const view = sessionView(
-    { id: 'session-author-a' },
-    [
-      {
-        type: 'assistant',
-        content: [{ type: 'text', text: 'Synthetic fixture response.' }],
-      },
-      {
-        type: 'user',
-        agent: 'chosen receiver is not source metadata',
-        text: 'The word delegate is not source metadata.',
-      },
-    ],
-    false,
-    [],
-  );
+  const messages: TestMessage[] = [
+    {
+      type: 'assistant',
+      content: [{ type: 'text', text: 'Synthetic fixture response.' }],
+    },
+    {
+      type: 'user',
+      agent: 'chosen receiver is not source metadata',
+      text: 'The word delegate is not source metadata.',
+    },
+  ];
+  const view = sessionView({ id: 'session-author-a' }, messages, false, []);
 
   assert.deepEqual(view.blocks.map(author), ['agent', 'unknown']);
 });
