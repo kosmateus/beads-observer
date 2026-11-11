@@ -212,7 +212,9 @@ test('running survives transient activity failure only within its grace period a
   }
 });
 
-test('a deleted session worktree becomes archived without a global ENOENT warning', async () => {
+test('a deleted session worktree becomes archived without a global ENOENT warning', async (t) => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
   const directory = await mkdtemp(join(tmpdir(), 'observer-session-missing-'));
   let failRead = false;
   const info = {
@@ -248,6 +250,7 @@ test('a deleted session worktree becomes archived without a global ENOENT warnin
     projectId: 'project',
     cwd: directory,
     listIssues: async () => ['task-a'],
+    clock: () => now,
     api: {
       active: async () => ({ data: { child: { type: 'running' } } }),
       diff: async () => ({ data: [] }),
@@ -259,6 +262,7 @@ test('a deleted session worktree becomes archived without a global ENOENT warnin
     assert.equal(records[0].status, 'running');
 
     info.location.directory = join(directory, 'deleted-worktree');
+    now += 5000;
     await observer.refresh();
     records = await readSessionRecords(directory, 'project');
     assert.equal(records[0].status, 'unknown');
@@ -364,7 +368,9 @@ test('JSON event discovers a child between catalog polls and subscription closes
   assert.equal(aborted, true);
 });
 
-test('discovery follows seven cursor pages with at most four concurrent reads', async () => {
+test('discovery follows seven cursor pages with at most four concurrent reads', async (t) => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
   const directory = await mkdtemp(join(tmpdir(), 'observer-pages-test-'));
   let pages = 0,
     reads = 0,
@@ -415,7 +421,10 @@ test('discovery follows seven cursor pages with at most four concurrent reads', 
     listIssues: async () => ['test-a'],
   });
   try {
-    for (let i = 0; i < 7; i++) await observer.refresh();
+    for (let i = 0; i < 7; i++) {
+      now += 5000;
+      await observer.refresh();
+    }
     assert.equal(pages, 7);
     assert.ok(maxReads <= 4);
     assert.ok(

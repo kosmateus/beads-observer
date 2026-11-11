@@ -283,6 +283,7 @@ test('session observer storage, scope, failure and lifecycle boundaries are isol
     time: { updated: 1 },
   });
   locations.set('/unavailable-worktree', Error('bd permission denied'));
+  now += 5000;
   await scopedError.refresh();
   assert.ok(
     [...writes.values()].some(

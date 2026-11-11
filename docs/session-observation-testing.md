@@ -38,5 +38,23 @@ scope changes, persistent and transient errors, new user turns, final snapshots,
 storage restoration, scope/cache bounds, subscription recovery and HTTP fallback.
 Fake timers verify actual scheduled five-second cadence after semantic events;
 a blocked in-flight context verifies that closing never starts queued RPCs.
+Historical rotation covers 660 idle sessions plus an active session, exceeding
+both the 128-entry context cache and 600-entry metadata cache. Permanent range
+failures survive eviction and forced reloads, while a new user turn or location
+still retries. Another 610 newly discovered historical sessions force both
+caches to evict an already failed session; a same-clock token then proves a
+metadata miss without another diff RPC. The small failure marker lives with the
+existing session record, not in another growing cache or a retry-TTL table.
+The RPC-budget fixture warms seven active and 260 historical sessions, then
+streams tokens for 10 seconds. It allows at most 54 metadata reads (14 active
+and two 20-session historical sweeps), exactly 14 active-context snapshots and
+no diff requests. Known foreign tokens cause no metadata reads, while moved
+sessions and unknown children are discovered immediately. Metadata cache size
+is capped at 600 entries: local info is reused for 5 seconds and negative
+membership for 30 seconds, with lifecycle/move invalidation. Stable idle records
+with an unchanged host revision retain their existing logs and diff without
+reloading an evicted context. Activity outages mark retained nonterminal records
+unknown without a compensating historical RPC burst; confirmed terminal outcomes
+remain authoritative.
 They never create sessions or inbox messages in a running host. Module mocking
 uses Node's `--experimental-test-module-mocks` test-only flag.
