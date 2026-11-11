@@ -86,7 +86,7 @@ test('session view orders timestamped messages oldest first without guessing fro
   );
 });
 
-test('session view attributes messages only from explicit origin metadata', () => {
+test('session view attributes user messages only from explicit origin metadata', () => {
   const messages: TestMessage[] = [
     {
       type: 'user',
@@ -104,10 +104,6 @@ test('session view attributes messages only from explicit origin metadata', () =
       agent: 'build',
       content: [{ type: 'text', text: 'agent response' }],
     },
-    {
-      type: 'assistant',
-      content: [{ type: 'text', text: 'unattributed assistant context' }],
-    },
   ];
   const view = sessionView({ id: 'session-a' }, messages, false, []);
 
@@ -120,8 +116,24 @@ test('session view attributes messages only from explicit origin metadata', () =
     'system',
     'synthetic',
     'agent',
-    'unknown',
   ]);
+});
+
+test('native assistant type identifies agent output without attributing user messages', () => {
+  const view = sessionView(
+    { id: 'session-author-a' },
+    [
+      {
+        type: 'assistant',
+        content: [{ type: 'text', text: 'Synthetic fixture response.' }],
+      },
+      { type: 'user', text: 'The word delegate is not source metadata.' },
+    ],
+    false,
+    [],
+  );
+
+  assert.deepEqual(view.blocks.map(author), ['agent', 'unknown']);
 });
 
 test('session view gives blocks without native IDs deterministic session-scoped keys', () => {

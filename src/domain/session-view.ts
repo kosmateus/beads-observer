@@ -20,7 +20,6 @@ interface Block {
   error?: string;
 }
 interface OriginAwareMessage extends SessionMessage {
-  agent?: string;
   metadata?: Record<string, unknown>;
 }
 const clip = (value: unknown, max = 4000) =>
@@ -53,6 +52,7 @@ function orderedMessages(messages: OriginAwareMessage[]) {
 function authorOf(message: OriginAwareMessage): Block['author'] {
   if (message.type === 'system') return 'system';
   if (message.type === 'synthetic') return 'synthetic';
+  if (message.type === 'assistant') return 'agent';
   const origin = message.metadata?.origin;
   if (
     origin === 'human' ||
@@ -63,9 +63,7 @@ function authorOf(message: OriginAwareMessage): Block['author'] {
     origin === 'synthetic'
   )
     return origin;
-  return message.type === 'assistant' && typeof message.agent === 'string'
-    ? 'agent'
-    : 'unknown';
+  return 'unknown';
 }
 
 export function sessionView(
