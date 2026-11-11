@@ -1,27 +1,36 @@
-export function array(value) {
+import type { Issue, Edge } from '../types.js';
+export function array<T = Record<string, unknown>>(value: unknown): T[] {
   if (Array.isArray(value)) return value;
   if (value == null) return [];
-  for (const key of ['issues', 'items', 'data', 'results'])
-    if (Array.isArray(value[key])) return value[key];
+  for (const key of ['issues', 'items', 'data', 'results']) {
+    const item = (value as Record<string, unknown>)[key];
+    if (Array.isArray(item)) return item;
+  }
   throw new Error('Nieznany format odpowiedzi Beads');
 }
-export function normalize(raw, ready = [], blocked = []) {
-  const issues = array(raw).map((x) => ({
+export function normalize(
+  raw: unknown,
+  ready: unknown = [],
+  blocked: unknown = [],
+) {
+  const issues: Issue[] = array<Partial<Issue>>(raw).map((x) => ({
     ...x,
     id: String(x.id),
-    title: x.title || x.id,
+    title: x.title || String(x.id),
     status: x.status || 'open',
     issue_type: x.issue_type || 'task',
     labels: x.labels || [],
     dependencies: x.dependencies || [],
   }));
   const readyIDs = new Set(
-    array(ready).map((x) => (typeof x === 'string' ? x : x.id)),
+    array<string | Issue>(ready).map((x) => (typeof x === 'string' ? x : x.id)),
   );
   const blockedIDs = new Set(
-    array(blocked).map((x) => (typeof x === 'string' ? x : x.id)),
+    array<string | Issue>(blocked).map((x) =>
+      typeof x === 'string' ? x : x.id,
+    ),
   );
-  const edges = new Map();
+  const edges = new Map<string, Edge>();
   for (const issue of issues) {
     issue.ready = readyIDs.has(issue.id);
     issue.blocked = blockedIDs.has(issue.id) || issue.status === 'blocked';

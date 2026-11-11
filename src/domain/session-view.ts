@@ -1,8 +1,26 @@
 // OpenCode v2.1.3: Session.Message.Info, FileDiff.Info. Do not infer task completion.
-const clip = (value, max = 4000) =>
+import type { SessionInfo, SessionMessage, SessionDiff } from '../types.js';
+interface Block {
+  kind: string;
+  text: string;
+  id?: string;
+  name?: string;
+  command?: string;
+  status?: string;
+  exit?: number;
+  time?: unknown;
+  error?: string;
+}
+const clip = (value: unknown, max = 4000) =>
   typeof value === 'string' ? value.slice(0, max) : '';
-export function sessionView(info, messages, active, diffs, warnings = []) {
-  const blocks = [];
+export function sessionView(
+  info: SessionInfo,
+  messages: SessionMessage[],
+  active: boolean,
+  diffs: SessionDiff[] | undefined,
+  warnings: string[] = [],
+) {
+  const blocks: Block[] = [];
   for (const message of messages.slice(-60)) {
     if (['user', 'system', 'synthetic'].includes(message.type))
       blocks.push({
@@ -83,8 +101,8 @@ export function sessionView(info, messages, active, diffs, warnings = []) {
       additions: x.additions,
       deletions: x.deletions,
       status: x.status,
-      truncated: x.patch?.length > 10000,
+      truncated: (x.patch?.length ?? 0) > 10000,
     })),
-    diffLimited: diffs?.length > 20,
+    diffLimited: (diffs?.length ?? 0) > 20,
   };
 }

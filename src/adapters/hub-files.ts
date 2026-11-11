@@ -10,8 +10,9 @@ import {
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
+import type { Lease } from '../types.js';
 export const LEASE_TTL_MS = 25000;
-export async function hubDirectory(port, root = tmpdir()) {
+export async function hubDirectory(port: number, root = tmpdir()) {
   const directory = join(
     resolve(root),
     `beads-observer-${process.getuid?.() ?? 'user'}-v1-${port}`,
@@ -22,15 +23,15 @@ export async function hubDirectory(port, root = tmpdir()) {
     throw new Error('Unsafe hub directory');
   if (
     process.platform !== 'win32' &&
-    (info.uid !== process.getuid() || info.mode & 0o077)
+    (info.uid !== process.getuid?.() || info.mode & 0o077)
   )
     throw new Error('Hub directory must be owned by this user with mode 0700');
   return directory;
 }
-export function runtimeIdentity(directory) {
+export function runtimeIdentity(directory: string) {
   return createHash('sha256').update(directory).digest('hex');
 }
-export async function atomicJSON(path, value) {
+export async function atomicJSON(path: string, value: unknown) {
   const temp = path + '.' + randomUUID() + '.tmp';
   try {
     await writeFile(temp, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
@@ -39,19 +40,21 @@ export async function atomicJSON(path, value) {
     await unlink(temp).catch(() => {});
   }
 }
-export async function readJSON(path) {
+export async function readJSON<T = Record<string, unknown>>(
+  path: string,
+): Promise<T> {
   const info = await lstat(path);
   if (!info.isFile() || info.isSymbolicLink() || info.size > 256 * 1024)
     throw new Error('Invalid hub record');
   return JSON.parse(await readFile(path, 'utf8'));
 }
-export async function readLeases(directory, now = Date.now()) {
-  const leases = [];
+export async function readLeases(directory: string, now = Date.now()) {
+  const leases: Lease[] = [];
   for (const file of (await readdir(directory))
     .filter((x) => /^lease-[0-9a-f-]+\.json$/.test(x))
     .sort()) {
     try {
-      const lease = await readJSON(join(directory, file));
+      const lease = await readJSON<Lease>(join(directory, file));
       if (
         !Array.isArray(lease.projects) ||
         !Number.isFinite(lease.updatedAt) ||

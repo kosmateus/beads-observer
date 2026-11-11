@@ -6,16 +6,19 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { canonicalProject, HUB_PROTOCOL } from './server.js';
+import type { ServerOptions, ProjectOptions, LeaseResult } from '../types.js';
+import { errorInfo } from '../types.js';
 import {
   hubDirectory,
   runtimeIdentity,
   atomicJSON,
   readJSON,
 } from '../adapters/hub-files.js';
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const delay = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /** OpenCode entrypoint adapter. A renewable file lease shares one daemon across processes. */
-export async function acquireSharedHub(options = {}) {
+export async function acquireSharedHub(options: ServerOptions = {}) {
   const port = options.port ?? 4317;
   if (!Number.isInteger(port) || port < 1 || port > 65535)
     throw new Error(
@@ -28,7 +31,7 @@ export async function acquireSharedHub(options = {}) {
       typeof x === 'string' ? { cwd: x } : x,
     ),
   ];
-  const configs = [];
+  const configs: ProjectOptions[] = [];
   for (const input of inputs) {
     const config = await canonicalProject({
       ...options,
@@ -54,10 +57,10 @@ export async function acquireSharedHub(options = {}) {
   const path = join(directory, `lease-${randomUUID()}.json`),
     url = `http://127.0.0.1:${port}`;
   let closed = false,
-    timer,
-    pending = null,
+    timer: ReturnType<typeof setTimeout> | undefined,
+    pending: Promise<void> | null = null,
     lastSpawn = 0,
-    spawnError = null;
+    spawnError: Error | null = null;
   const writeLease = () =>
     atomicJSON(path, {
       updatedAt: Date.now(),
@@ -68,10 +71,11 @@ export async function acquireSharedHub(options = {}) {
     let response;
     try {
       response = await probeHub(port);
-    } catch (error) {
+    } catch (caught) {
+      const error = errorInfo(caught);
       throw new Error(
         `Observer health probe failed on port ${port}: ${error.message}`,
-        { cause: error },
+        { cause: caught },
       );
     }
     if (!response) return false;
@@ -112,7 +116,7 @@ export async function acquireSharedHub(options = {}) {
     if (!(await health())) launch();
     if (spawnError)
       throw new Error(
-        `Cannot start hub: ${spawnError.message}. Set nodePath to Node.js 22+.`,
+        `Cannot start hub: ${errorInfo(spawnError).message}. Set nodePath to Node.js 22+.`,
       );
   }
   const close = async () => {
@@ -125,11 +129,13 @@ export async function acquireSharedHub(options = {}) {
   try {
     await writeLease();
     await ensure();
-    let result;
+    let result: LeaseResult | null = null;
     for (let i = 0; i < 50; i++) {
       if (spawnError) throw spawnError;
       if (await health()) {
-        result = await readJSON(path + '.result').catch(() => null);
+        result = await readJSON<LeaseResult>(path + '.result').catch(
+          () => null,
+        );
         if (result) {
           if (result.errors.length) throw new Error(result.errors.join('; '));
           break;

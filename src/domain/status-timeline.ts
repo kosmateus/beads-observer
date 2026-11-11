@@ -1,9 +1,26 @@
 /** Durations cover retained audit transitions only, not an assumed complete lifecycle. */
-export function statusTimeline(issue, events, now = Date.now()) {
-  const transitions = [];
-  const parse = (value) => {
+import type { StatusEvent } from '../types.js';
+import { record } from '../types.js';
+export interface Transition {
+  status: string;
+  at: number;
+  actor: string;
+  id?: string | number;
+  until?: number;
+  durationMs?: number;
+  ongoing?: boolean;
+}
+export function statusTimeline(
+  issue: { status?: string },
+  events: StatusEvent[] | undefined,
+  now = Date.now(),
+) {
+  const transitions: Transition[] = [];
+  const parse = (value: unknown) => {
     try {
-      return typeof value === 'object' ? value : JSON.parse(value);
+      return record(
+        typeof value === 'object' ? value : JSON.parse(String(value)),
+      );
     } catch {
       return null;
     }
@@ -39,12 +56,12 @@ export function statusTimeline(issue, events, now = Date.now()) {
     )
   )
     return { reason: 'ambiguous', transitions, totals: [] };
-  if (transitions.at(-1).status !== issue.status)
+  if (transitions.at(-1)!.status !== issue.status)
     return { reason: 'mismatch', transitions, totals: [] };
-  const segments = [];
+  const segments: Transition[] = [];
   for (const item of transitions)
     if (segments.at(-1)?.status !== item.status) segments.push({ ...item });
-  const totals = new Map();
+  const totals = new Map<string, number>();
   segments.forEach((item, i) => {
     item.until = segments[i + 1]?.at ?? now;
     item.durationMs = item.until - item.at;

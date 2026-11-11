@@ -3,26 +3,43 @@ import { realpath } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { array, normalize } from '../domain/model.js';
+import type { Issue, Location, StatusEvent } from '../types.js';
+import { errorInfo } from '../types.js';
 const exec = promisify(execFile);
 export class BeadsSource {
   #activeReads = 0;
-  #readQueue = [];
-  async run(args) {
+  #readQueue: (() => void)[] = [];
+  cwd: string;
+  bdPath: string;
+  timeoutMs: number;
+  pinnedLocation?: string;
+  versionRequest?: Promise<string | null> | null;
+  async run<T = Record<string, unknown>>(args: string[]): Promise<T> {
     if (this.#activeReads >= 2)
-      await new Promise((resolve) => this.#readQueue.push(resolve));
+      await new Promise<void>((resolve) => this.#readQueue.push(resolve));
     else this.#activeReads++;
     try {
-      return await this.execute(args);
+      return await this.execute<T>(args);
     } finally {
       const next = this.#readQueue.shift();
       if (next) next();
       else this.#activeReads--;
     }
   }
-  constructor({ cwd, bdPath = 'bd', timeoutMs = 15000 }) {
-    Object.assign(this, { cwd, bdPath, timeoutMs });
+  constructor({
+    cwd,
+    bdPath = 'bd',
+    timeoutMs = 15000,
+  }: {
+    cwd: string;
+    bdPath?: string;
+    timeoutMs?: number;
+  }) {
+    this.cwd = cwd;
+    this.bdPath = bdPath;
+    this.timeoutMs = timeoutMs;
   }
-  async execute(args) {
+  async execute<T = Record<string, unknown>>(args: string[]): Promise<T> {
     const { stdout } = await exec(
       this.bdPath,
       ['--readonly', '--json', ...args],
@@ -41,7 +58,7 @@ export class BeadsSource {
     }
   }
   async location() {
-    const location = await this.run(['where']);
+    const location = await this.run<Location>(['where']);
     if (!location.path) throw new Error('Beads did not identify its workspace');
     const actual = await realpath(location.path);
     if (this.pinnedLocation && this.pinnedLocation !== actual)
@@ -78,7 +95,7 @@ export class BeadsSource {
       '--include-templates',
     ]);
     await this.location();
-    return array(issues);
+    return array<Issue>(issues);
   }
   async snapshot() {
     const location = await this.location();
@@ -102,13 +119,13 @@ export class BeadsSource {
       beadsVersion: await this.version(),
     };
   }
-  async activity(id) {
+  async activity(id: string) {
     await this.location();
     const [comments, events] = await Promise.all([
       this.run(['comments', '--', id]),
       this.run(['history', '--events', '--limit', '0', '--', id]).then(
-        (value) => ({ value }),
-        (error) => ({ error }),
+        (value) => ({ value, error: undefined }),
+        (error: unknown) => ({ value: undefined, error: errorInfo(error) }),
       ),
     ]);
     await this.location();
@@ -119,23 +136,23 @@ export class BeadsSource {
       statusEventsWarning: events.error?.message,
     };
   }
-  async detail(id) {
+  async detail(id: string) {
     await this.location();
     const [data, comments, historyResult, eventsResult] = await Promise.all([
-      this.run(['show', `--id=${id}`, '--long']),
+      this.run<Issue | Issue[]>(['show', `--id=${id}`, '--long']),
       this.run(['comments', '--', id]),
       this.run(['history', '--limit', '50', '--', id]).then(
-        (value) => ({ value }),
-        (error) => ({ error }),
+        (value) => ({ value, error: undefined }),
+        (error: unknown) => ({ value: undefined, error: errorInfo(error) }),
       ),
       this.run(['history', '--events', '--limit', '0', '--', id]).then(
-        (value) => ({ value }),
-        (error) => ({ error }),
+        (value) => ({ value, error: undefined }),
+        (error: unknown) => ({ value: undefined, error: errorInfo(error) }),
       ),
     ]);
     const issue = Array.isArray(data) ? data[0] : data;
     const history = array(historyResult.value),
-      statusEvents = array(eventsResult.value);
+      statusEvents = array<StatusEvent>(eventsResult.value);
     const historyWarning = historyResult.error
       ? `Historia niedostępna: ${historyResult.error.message}`
       : undefined;
@@ -154,7 +171,7 @@ export class BeadsSource {
 }
 
 /** Never inherit another project's Beads/Dolt/Git routing into a project reader. */
-export function projectEnvironment(parent) {
+export function projectEnvironment(parent: NodeJS.ProcessEnv) {
   const env = Object.fromEntries(
     Object.entries(parent).filter(
       ([key]) =>

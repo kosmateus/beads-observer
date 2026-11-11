@@ -1,7 +1,8 @@
 /** Project registry input port. Each entry owns a separate Observer and subscriptions. */
+import type { ProjectEntry } from '../types.js';
 export class Projects {
-  #entries = new Map();
-  #listeners = new Set();
+  #entries = new Map<string, ProjectEntry & { off: () => void }>();
+  #listeners = new Set<(list: ReturnType<Projects['list']>) => void>();
   list() {
     return [...this.#entries.values()]
       .map(({ id, name, cwd, observer, hostVersions }) => ({
@@ -19,21 +20,21 @@ export class Projects {
         (a, b) => a.name.localeCompare(b.name) || a.cwd.localeCompare(b.cwd),
       );
   }
-  add(entry) {
+  add(entry: ProjectEntry) {
     if (this.#entries.has(entry.id))
       throw new Error('Project already registered');
     const off = entry.observer.subscribe(() => this.#emit());
     this.#entries.set(entry.id, { ...entry, off });
     this.#emit();
   }
-  setHostVersions(id, versions) {
+  setHostVersions(id: string, versions: string[]) {
     const entry = this.get(id);
     if (JSON.stringify(entry.hostVersions) !== JSON.stringify(versions)) {
       entry.hostVersions = versions;
       this.#emit();
     }
   }
-  remove(id) {
+  remove(id: string) {
     const entry = this.#entries.get(id);
     if (entry) {
       entry.off();
@@ -41,18 +42,20 @@ export class Projects {
       this.#emit();
     }
   }
-  get(id) {
+  get(id?: string) {
     if (!id && this.#entries.size === 1)
-      return this.#entries.values().next().value;
-    const entry = this.#entries.get(id);
+      return this.#entries.values().next().value!;
+    const entry = id === undefined ? undefined : this.#entries.get(id);
     if (!entry) {
-      const error = new Error(id ? 'Unknown project' : 'Select a project');
-      error.status = id ? 404 : 409;
+      const error = Object.assign(
+        new Error(id ? 'Unknown project' : 'Select a project'),
+        { status: id ? 404 : 409 },
+      );
       throw error;
     }
     return entry;
   }
-  snapshot(id) {
+  snapshot(id?: string) {
     const entry = this.get(id);
     return {
       ...entry.observer.state,
@@ -65,7 +68,7 @@ export class Projects {
       canRelate: typeof entry.writer?.addRelation === 'function',
     };
   }
-  subscribe(listener) {
+  subscribe(listener: (list: ReturnType<Projects['list']>) => void) {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }

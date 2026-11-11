@@ -4,10 +4,14 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { projectEnvironment } from './beads-cli.js';
+import type { BeadsSource } from './beads-cli.js';
+import type { Draft, Update, Relation, IssueDetail } from '../types.js';
+import { errorInfo } from '../types.js';
 const execute = promisify(execFile);
 /** Write port: only creation, with a fixed command and whitelisted arguments. */
 export class BeadsWriter {
-  constructor(reader) {
+  reader: BeadsSource;
+  constructor(reader: BeadsSource) {
     this.reader = reader;
   }
   async resetPreview() {
@@ -34,13 +38,18 @@ export class BeadsWriter {
         mode: 'native',
         preview: result.stdout,
       };
-    } catch (error) {
+    } catch (caught) {
+      const error = errorInfo(caught);
       if (!String(error.stderr).includes('not yet supported in embedded mode'))
         throw error;
       return { path: expected, identity, mode: 'embedded', preview: expected };
     }
   }
-  async reset(expectedPath, expectedIdentity, expectedMode) {
+  async reset(
+    expectedPath: string,
+    expectedIdentity: string,
+    expectedMode?: string,
+  ) {
     const preview = await this.resetPreview();
     if (
       preview.path !== expectedPath ||
@@ -66,7 +75,7 @@ export class BeadsWriter {
       });
     }
   }
-  async update(draft) {
+  async update(draft: Update) {
     const reader = this.reader;
     await reader.location();
     await reader.detail(draft.id);
@@ -93,7 +102,8 @@ export class BeadsWriter {
         },
       );
       return await reader.detail(draft.id);
-    } catch (error) {
+    } catch (caught) {
+      const error = errorInfo(caught);
       throw Object.assign(
         new Error(
           `Update could not be confirmed. Check the project before submitting again. ${error.message}`,
@@ -102,7 +112,7 @@ export class BeadsWriter {
       );
     }
   }
-  async addRelation(draft) {
+  async addRelation(draft: Relation) {
     const reader = this.reader;
     await reader.location();
     await reader.detail(draft.issue);
@@ -133,9 +143,10 @@ export class BeadsWriter {
         issue: draft.issue,
         target: draft.target,
         type: draft.type,
-        result: JSON.parse(stdout),
+        result: JSON.parse(stdout) as unknown,
       };
-    } catch (error) {
+    } catch (caught) {
+      const error = errorInfo(caught);
       throw Object.assign(
         new Error(
           `Relation could not be confirmed. Check the project before submitting again. ${error.message}`,
@@ -144,7 +155,7 @@ export class BeadsWriter {
       );
     }
   }
-  async create(draft) {
+  async create(draft: Draft) {
     const reader = this.reader;
     await reader.location();
     if (draft.parent) {
@@ -171,10 +182,11 @@ export class BeadsWriter {
         maxBuffer: 4 * 1024 * 1024,
         windowsHide: true,
       });
-      const result = JSON.parse(stdout);
+      const result: IssueDetail = JSON.parse(stdout);
       if (!result?.id) throw Error('No issue ID returned');
       return result;
-    } catch (error) {
+    } catch (caught) {
+      const error = errorInfo(caught);
       throw Object.assign(
         new Error(
           `Creation could not be confirmed. Check the project before submitting again. ${error.message}`,
