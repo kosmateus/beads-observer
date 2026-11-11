@@ -18,7 +18,10 @@ test('dashboard viewport is shared by all views but excludes full-page details',
 });
 
 test('board, list and activity use content-only scrolling and retain scroll position', async () => {
-  const app = await readFile(new URL('../web/app.js', import.meta.url), 'utf8');
+  const app = await readFile(
+    new URL('../../web/app.ts', import.meta.url),
+    'utf8',
+  );
   assert.match(app, /options\s*\+\s*'<div class="view-scroll">'/);
   assert.match(app, /<div class="view-scroll">\$\{renderActivity\(rows\)\}/);
   assert.match(app, /<div class="view-scroll">\$\{renderBoard\(rows\)\}/);

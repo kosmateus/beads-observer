@@ -1,4 +1,5 @@
 import test from 'node:test';
+import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,11 +11,16 @@ import {
 import { readSessionRecords } from '../src/adapters/session-records.js';
 
 const known = new Set(['task-a', 'task-b']);
-const tool = (name, input, content = [], status = 'completed') => ({
+const tool = (
+  name: string,
+  input: Record<string, unknown>,
+  content: { type: string; text: string }[] = [],
+  status = 'completed',
+) => ({
   type: 'assistant',
   content: [{ type: 'tool', name, state: { status, input, content } }],
 });
-const shell = (command) => tool('shell', { command });
+const shell = (command: string) => tool('shell', { command });
 
 test('children need their own evidence; remembered parent links are not evidence', () => {
   const sessions = new Map([
@@ -37,9 +43,9 @@ test('children need their own evidence; remembered parent links are not evidence
     new Map(),
     new Map([['child', { issueId: 'task-a', source: 'parent' }]]),
   );
-  assert.equal(links.get('parent').issueId, 'task-a');
+  assert.equal(links.get('parent')?.issueId, 'task-a');
   assert.equal(links.get('child'), null);
-  assert.equal(links.get('assigned').issueId, 'task-b');
+  assert.equal(links.get('assigned')?.issueId, 'task-b');
 });
 
 test('manual assignment wins, and remembered direct evidence survives compaction', () => {
@@ -49,7 +55,7 @@ test('manual assignment wins, and remembered direct evidence survives compaction
   ]);
   assert.equal(
     resolveSessionLinks(sessions, known, new Map(), remembered).get('s')
-      .issueId,
+      ?.issueId,
     'task-a',
   );
   assert.equal(
@@ -58,7 +64,7 @@ test('manual assignment wins, and remembered direct evidence survives compaction
       known,
       new Map([['s', ['task-b']]]),
       remembered,
-    ).get('s').issueId,
+    ).get('s')?.issueId,
     'task-b',
   );
 });
@@ -187,7 +193,7 @@ test('execute recognizes literal shell calls, not code strings, comments or outp
     );
 });
 
-async function recordsFixture(t) {
+async function recordsFixture(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), 'observer-records-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const record = {
@@ -199,7 +205,7 @@ async function recordsFixture(t) {
     status: 'running',
     updatedAt: Date.now(),
   };
-  const put = (name, value) =>
+  const put = (name: string, value: Record<string, unknown>) =>
     writeFile(
       join(directory, `session-p-${name}.json`),
       JSON.stringify({ ...record, ...value }),
@@ -242,12 +248,12 @@ test('disconnected or expired records never report live running/streaming activi
     (await readSessionRecords(directory, 'p')).map((r) => [r.sessionID, r]),
   );
   for (const id of ['stale', 'future', 'offline']) {
-    assert.equal(result.get(id).connected, false);
-    assert.equal(result.get(id).status, 'unknown');
+    assert.equal(result.get(id)?.connected, false);
+    assert.equal(result.get(id)?.status, 'unknown');
   }
-  assert.equal(result.get('done').status, 'succeeded');
-  assert.equal(result.get('live').connected, true);
-  assert.equal(result.get('live').status, 'running');
+  assert.equal(result.get('done')?.status, 'succeeded');
+  assert.equal(result.get('live')?.connected, true);
+  assert.equal(result.get('live')?.status, 'running');
 });
 
 test('same-timestamp offline record wins and TTL is reevaluated on cache hits', async (t) => {
@@ -259,7 +265,7 @@ test('same-timestamp offline record wins and TTL is reevaluated on cache hits', 
   assert.equal(
     (await readSessionRecords(directory, 'p')).find(
       (r) => r.sessionID === 'live',
-    ).connected,
+    )?.connected,
     true,
   );
   const realNow = Date.now;
@@ -268,8 +274,8 @@ test('same-timestamp offline record wins and TTL is reevaluated on cache hits', 
     const expired = (await readSessionRecords(directory, 'p')).find(
       (r) => r.sessionID === 'live',
     );
-    assert.equal(expired.connected, false);
-    assert.equal(expired.status, 'unknown');
+    assert.equal(expired?.connected, false);
+    assert.equal(expired?.status, 'unknown');
   } finally {
     Date.now = realNow;
   }

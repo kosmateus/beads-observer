@@ -5,11 +5,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readActivityAvailability, listenHttp } from '../src/adapters/http.js';
 import { renderSessions } from '../web/sessions.js';
+import { Projects } from '../src/application/projects.js';
+import { Observer } from '../src/application/observer.js';
+
+interface SessionDetails {
+  available: boolean;
+  sessions: { sessionID: string; status: string }[];
+}
 
 test('bridge availability is fresh, project-scoped and never follows symlinks', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'observer-activity-'));
   const file = join(directory, 'bridge-project-host.json');
-  const bridge = (overrides) =>
+  const bridge = (overrides: Record<string, unknown>) =>
     writeFile(
       file,
       JSON.stringify({
@@ -72,7 +79,7 @@ test('bridge availability is fresh, project-scoped and never follows symlinks', 
 
 test('HTTP summary separates availability from activity and excludes disconnected sessions', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'observer-activity-'));
-  let http;
+  let http: Awaited<ReturnType<typeof listenHttp>> | undefined;
   try {
     const bridge = join(directory, 'bridge-project-host.json');
     await writeFile(
@@ -107,16 +114,36 @@ test('HTTP summary separates availability from activity and excludes disconnecte
         connected: false,
       }),
     );
-    const project = {
+    const observer = new Observer({
+      snapshot: async () => ({ issues: [], edges: [] }),
+      detail: async () => undefined,
+    });
+    observer.state.issues = [
+      {
+        id: 'task-1',
+        title: 'Test task',
+        status: 'open',
+        issue_type: 'task',
+        labels: [],
+        dependencies: [],
+      },
+    ];
+    const projects = new Projects();
+    projects.add({
       id: 'project',
-      observer: { state: { issues: [{ id: 'task-1' }] } },
-    };
-    http = await listenHttp(
-      { get: () => project, subscribe: () => () => {} },
-      { port: 0, sessionDirectory: directory },
-    );
-    const get = (query) =>
-      fetch(http.url + '/api/projects/project/sessions' + query).then((r) =>
+      name: 'Test project',
+      cwd: directory,
+      observer,
+    });
+    http = await listenHttp(projects, {
+      port: 0,
+      runtimeId: 'test',
+      protocol: 1,
+      sessionDirectory: directory,
+    });
+    const url = http.url;
+    const get = (query: string): Promise<SessionDetails> =>
+      fetch(url + '/api/projects/project/sessions' + query).then((r) =>
         r.json(),
       );
     assert.deepEqual(await get('?summary=1'), {
@@ -133,7 +160,7 @@ test('HTTP summary separates availability from activity and excludes disconnecte
     const detail = await get('?issue=task-1');
     assert.equal(detail.available, false);
     assert.equal(
-      detail.sessions.find((s) => s.sessionID === 'ses-disconnected').status,
+      detail.sessions.find((s) => s.sessionID === 'ses-disconnected')?.status,
       'unknown',
     );
   } finally {
@@ -143,7 +170,7 @@ test('HTTP summary separates availability from activity and excludes disconnecte
 });
 
 test('session panel does not claim missing links when activity reads are unavailable', () => {
-  const t = (key) => key;
+  const t = (key: string) => key;
   assert.equal(
     renderSessions([], t, 'task-1', { available: false }),
     '<p class="muted">sessionReadUnavailable</p>',

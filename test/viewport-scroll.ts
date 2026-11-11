@@ -1,24 +1,17 @@
-// Opt-in real-browser check; dependencies and Chromium stay outside the package.
-// npm install --prefix /tmp/opencode/observer-viewport --no-audit --no-fund playwright
-// PLAYWRIGHT_BROWSERS_PATH=/tmp/opencode/observer-viewport/browsers \
-//   /tmp/opencode/observer-viewport/node_modules/.bin/playwright install chromium
+// Opt-in real-browser check; Playwright is a development-only dependency.
+// Install Chromium with `npx playwright install chromium`, or point
+// PLAYWRIGHT_EXECUTABLE_PATH at an existing compatible Chromium executable.
 // If host libraries are missing, extract their .deb archives under /tmp/opencode
 // and set LD_LIBRARY_PATH to that directory (do not use install-deps/sudo).
-// TMPDIR=/tmp/opencode node test/viewport-scroll.mjs
+// TMPDIR=/tmp/opencode node dist/test/viewport-scroll.js
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
+import { chromium } from 'playwright';
+import type { Browser, Page } from 'playwright';
 import { fileURLToPath } from 'node:url';
 import { startServer } from '../src/bootstrap/server.js';
 import { DemoSource, demoIssues } from '../src/adapters/demo.js';
 import { normalize } from '../src/domain/model.js';
 
-process.env.PLAYWRIGHT_BROWSERS_PATH ??=
-  '/tmp/opencode/observer-viewport/browsers';
-const require = createRequire(import.meta.url);
-const { chromium } = require(
-  process.env.OBSERVER_PLAYWRIGHT ||
-    '/tmp/opencode/observer-viewport/node_modules/playwright',
-);
 const source = new DemoSource();
 source.issues = Array.from({ length: 160 }, (_, i) => ({
   ...demoIssues()[4],
@@ -36,7 +29,8 @@ source.issues = Array.from({ length: 160 }, (_, i) => ({
 source.events = new Map(source.issues.map((issue) => [issue.id, []]));
 source.snapshot = async () => normalize(structuredClone(source.issues), [], []);
 
-let server, browser;
+let server: Awaited<ReturnType<typeof startServer>> | undefined;
+let browser: Browser | undefined;
 try {
   server = await startServer({
     port: 0,
@@ -53,14 +47,20 @@ try {
     issue.notes = 'Updated fixture';
   });
   await server.observer.refresh();
-  browser = await chromium.launch({ headless: true });
-  const failures = [];
+  browser = await chromium.launch({
+    headless: true,
+    executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH,
+  });
+  const failures: string[] = [];
   for (const viewport of [
     { width: 2000, height: 900 },
     { width: 1100, height: 800 },
     { width: 390, height: 844 },
   ]) {
-    const page = await browser.newPage({ viewport, reducedMotion: 'reduce' });
+    const page: Page = await browser.newPage({
+      viewport,
+      reducedMotion: 'reduce',
+    });
     const label = `${viewport.width}x${viewport.height}`;
     try {
       await page.goto(server.url);
@@ -76,6 +76,8 @@ try {
           const measure = () =>
             page.evaluate((selector) => {
               const region = document.querySelector(selector);
+              if (!region)
+                throw new Error('Missing scroll region: ' + selector);
               const fixed = [
                 '.app-header',
                 '.topbar',
@@ -115,7 +117,8 @@ try {
           await page.locator(selector).hover();
           await page.mouse.wheel(0, 600);
           await page.waitForFunction(
-            (selector) => document.querySelector(selector).scrollTop > 0,
+            (selector) =>
+              (document.querySelector(selector)?.scrollTop ?? 0) > 0,
             selector,
           );
           const after = await measure();
@@ -138,8 +141,12 @@ try {
             `PASS ${label} ${view}: scrollTop=${after.scrollTop}, region=${after.clientHeight}/${after.scrollHeight}, document=${after.documentHeight}`,
           );
         } catch (error) {
-          failures.push(`${label} ${view}: ${error.stack}`);
-          console.error(`FAIL ${label} ${view}: ${error.message}`);
+          failures.push(
+            `${label} ${view}: ${error instanceof Error ? error.stack : String(error)}`,
+          );
+          console.error(
+            `FAIL ${label} ${view}: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
       }
       for (const mode of ['drawer', 'page']) {
@@ -174,8 +181,12 @@ try {
         await page.locator('#close-detail').click();
       }
     } catch (error) {
-      failures.push(`${label}: ${error.stack}`);
-      console.error(`FAIL ${label}: ${error.message}`);
+      failures.push(
+        `${label}: ${error instanceof Error ? error.stack : String(error)}`,
+      );
+      console.error(
+        `FAIL ${label}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     } finally {
       await page.close();
     }
