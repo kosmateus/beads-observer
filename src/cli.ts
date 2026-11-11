@@ -62,15 +62,12 @@ try {
       }
     } catch {}
     if (existing) {
-      await openBrowser(`${url}/?project=${canonical.id}`);
-      console.log(`Beads Observer: ${url}`);
+      const result = await openBrowser(`${url}/?project=${canonical.id}`);
+      console.log(result.opened ? `Beads Observer: ${url}` : result.message);
     } else {
       app = await acquireSharedHub(config);
-      try {
-        await openBrowser(`${app.url}/?project=${canonical.id}`);
-      } catch (error) {
-        console.error(errorInfo(error).message);
-      }
+      const result = await openBrowser(`${app.url}/?project=${canonical.id}`);
+      if (!result.opened) console.log(result.message);
       // Keep the CLI's project lease alive until Ctrl+C.
       const keepAlive = setInterval(() => {}, 60000);
       const close = app.close;
