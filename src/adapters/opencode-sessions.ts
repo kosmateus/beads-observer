@@ -57,7 +57,12 @@ export async function observeOpenCodeSessions(
     history = new Map<string, string[]>(),
     records = new Map<
       string,
-      Omit<SessionRecord, 'activeIssueId'> & { activeIssueId: string | null }
+      Omit<SessionRecord, 'activeIssueId'> & {
+        activeIssueId: string | null;
+        diffs?: SessionDiff[];
+        diffFailure?: { scope: string; error: string };
+        observationRevision?: string;
+      }
     >(),
     controller = new AbortController();
   const contextCache = new Map<
@@ -79,6 +84,14 @@ export async function observeOpenCodeSessions(
     dirty = new Set<string>(),
     urgent = new Set<string>(),
     mutations = new Map<string, number>(),
+    metadataCache = new Map<
+      string,
+      {
+        info: ObserverSessionInfo;
+        belongs: boolean;
+        at: number;
+      }
+    >(),
     scopeCache = new Map<string, { value: boolean; at: number }>();
   let persisted = '',
     catalogCursor: string | undefined;
@@ -99,6 +112,7 @@ export async function observeOpenCodeSessions(
     known = new Set<string>(),
     catalogAt = 0,
     issueAt = 0,
+    maintenanceAt = 0,
     recent: string[] = [],
     previousActive: string[] = [],
     idleCursor = 0;
@@ -222,7 +236,9 @@ export async function observeOpenCodeSessions(
           );
           const ids = data(result).map((x) => x.id);
           catalogCursor = result.cursor?.next;
-          recent = [...new Set([...recent, ...ids])];
+          recent = [
+            ...new Set([...recent, ...ids.filter((id) => !records.has(id))]),
+          ];
           catalogAt = Date.now();
         } catch (error) {
           catalogCursor = undefined;
@@ -243,9 +259,46 @@ export async function observeOpenCodeSessions(
       async function load(sessionID: string) {
         if (closed || sessions.has(sessionID) || failed.has(sessionID)) return;
         try {
-          const info = data(await ctx.session.get({ sessionID }));
-          if (!(await belongs(info))) {
+          let metadata = metadataCache.get(sessionID);
+          const activityChanged =
+            active !== null &&
+            Boolean(active[sessionID]) !== previousActive.includes(sessionID);
+          if (
+            !metadata ||
+            (metadata.belongs && activityChanged) ||
+            Date.now() - metadata.at >= (metadata.belongs ? 5000 : 30000)
+          ) {
+            const info = data(await ctx.session.get({ sessionID }));
+            metadata = { info, belongs: await belongs(info), at: Date.now() };
+            metadataCache.set(sessionID, metadata);
+            if (metadataCache.size > 600)
+              metadataCache.delete(metadataCache.keys().next().value!);
+          }
+          if (!metadata.belongs) {
             failed.add(sessionID);
+            return;
+          }
+          const info = metadata.info;
+          const observationRevision = JSON.stringify([
+            info.location,
+            info.time,
+          ]);
+          const old = records.get(sessionID);
+          // Stable idle sessions need fresh membership/metadata, not another
+          // context/diff just because their messages left the bounded cache.
+          if (
+            info.time?.updated !== undefined &&
+            old?.connected &&
+            active !== null &&
+            !active[sessionID] &&
+            !previousActive.includes(sessionID) &&
+            !dirty.has(sessionID) &&
+            old.observationRevision === observationRevision &&
+            old.status === (info.outcome || 'idle')
+          ) {
+            const fresh = { ...old, updatedAt: Date.now() };
+            records.set(sessionID, fresh);
+            await atomicJSON(filename(sessionID), fresh);
             return;
           }
           let cached = contextCache.get(sessionID);
@@ -289,12 +342,17 @@ export async function observeOpenCodeSessions(
         }
       }
       // Active sessions and event IDs bypass the bounded historical queue.
-      const idle = [...records.keys()].filter((id) => !active?.[id]);
+      const maintenance = Date.now() - maintenanceAt >= 5000;
+      if (maintenance) maintenanceAt = Date.now();
+      const idle = maintenance
+        ? [...records.keys()].filter((id) => !active?.[id])
+        : [];
       const idleBatch = Array.from(
         { length: Math.min(20, idle.length) },
         (_, index) => idle[(idleCursor + index) % idle.length],
       );
-      idleCursor = idle.length ? (idleCursor + 20) % idle.length : 0;
+      if (maintenance)
+        idleCursor = idle.length ? (idleCursor + 20) % idle.length : 0;
       await parallel(
         [
           ...new Set([
@@ -303,7 +361,7 @@ export async function observeOpenCodeSessions(
             ...dirty,
             ...manual.keys(),
             ...idleBatch,
-            ...recent.splice(0, 20),
+            ...(maintenance ? recent.splice(0, 20) : []),
           ]),
         ],
         load,
@@ -332,7 +390,8 @@ export async function observeOpenCodeSessions(
           localWarnings.push(
             'Several Beads IDs found; no current task selected automatically',
           );
-        let diffs = cached.diffs || [];
+        const old = records.get(sessionID);
+        let diffs = cached.diffs || old?.diffs || [];
         // Ignore text/output deltas and known read-only tools. Unknown tools
         // can write files too (not just patch), so retain their terminal state.
         // A bounded fallback covers writes inside a still-running shell/execute.
@@ -368,6 +427,14 @@ export async function observeOpenCodeSessions(
           cached.location,
           messages.filter((message) => message.type === 'user').at(-1)?.id,
         ]);
+        // The 128-entry message cache is disposable; a rejected range is not.
+        // Keep its tiny marker with the already-retained session record, so
+        // historical rotation cannot turn a permanent error into another RPC.
+        if (old?.diffFailure?.scope === diffScope) {
+          cached.diffScope = diffScope;
+          cached.diffError = old.diffFailure.error;
+          cached.permanent = true;
+        }
         if (cached.diffScope && cached.diffScope !== diffScope) {
           cached.permanent = false;
           cached.diffError = undefined;
@@ -435,6 +502,10 @@ export async function observeOpenCodeSessions(
           activeIssueId: link?.issueId || null,
           linkSource: link?.source || null,
           parentSessionID: info.parentID || null,
+          diffFailure: cached.permanent
+            ? { scope: diffScope, error: cached.diffError! }
+            : undefined,
+          observationRevision: JSON.stringify([info.location, info.time]),
           connected: true,
           updatedAt: Date.now(),
         };
@@ -442,6 +513,15 @@ export async function observeOpenCodeSessions(
         records.set(sessionID, record);
         await atomicJSON(filename(sessionID), record);
       });
+      // Availability is global; mark retained records unknown immediately,
+      // without turning an activity outage into a full historical RPC sweep.
+      if (active === null)
+        for (const [id, old] of records)
+          if (old.status !== 'unknown') {
+            const stale = { ...old, status: 'unknown', updatedAt: Date.now() };
+            records.set(id, stale);
+            await atomicJSON(filename(id), stale);
+          }
       if (active !== null) previousActive = Object.keys(active);
       await persist().catch((error) =>
         warnings.push('Session storage: ' + error.message),
@@ -509,6 +589,21 @@ export async function observeOpenCodeSessions(
           if (closed) break;
           const event = typeof raw === 'string' ? JSON.parse(raw) : raw;
           if (event.data?.sessionID) {
+            const known = metadataCache.get(event.data.sessionID);
+            const moved = /^session\.(created|moved)$/.test(event.type || '');
+            if (
+              known &&
+              !known.belongs &&
+              Date.now() - known.at < 30000 &&
+              !moved
+            )
+              continue;
+            if (
+              /^session\.(created|moved|deleted|renamed|agent\.selected|model\.selected|metadata\.updated|execution\.(started|succeeded|failed|interrupted))$/.test(
+                event.type || '',
+              )
+            )
+              metadataCache.delete(event.data.sessionID);
             dirty.add(event.data.sessionID);
             if (
               /^session\.(tool\.(success|failed)|shell\.ended|moved|revert\.(committed|cleared)|execution\.(succeeded|failed|interrupted))$/.test(
@@ -551,11 +646,13 @@ export async function observeOpenCodeSessions(
       const info = data(await ctx.session.get({ sessionID }));
       if (!(await belongs(info)))
         throw Error('Session belongs to another project');
+      metadataCache.delete(sessionID);
       manual.set(sessionID, [
         ...(manual.get(sessionID) || []).filter((id) => id !== issueId),
         issueId,
       ]);
       await persist();
+      dirty.add(sessionID);
       await pending;
       await update();
     },
