@@ -164,13 +164,14 @@ pushing a version commit directly to protected `main`.
 Publishing uses **npm Trusted Publishing (OIDC)**, not a stored npm token. After
 the initial authenticated publication, configure the package's trusted publisher
 for GitHub repository `kosmateus/beads-observer`, workflow `release.yml`, with
-no environment requirement. The first publication requires npm access to the
+no environment requirement, and enable **Allow npm publish**. The first publication requires npm access to the
 `opentoria` organization and may require interactive 2FA.
 
-Maintainers can configure that trust relationship after the package exists:
+Maintainers can configure that trust relationship after the package exists
+using npm CLI **11.21+**:
 
 ```sh
-npm trust github @opentoria/beads-observer --repo kosmateus/beads-observer --file release.yml --yes
+npm trust github @opentoria/beads-observer --repo kosmateus/beads-observer --file release.yml --allow-publish --allow-stage-publish --yes
 ```
 
 This command may require a separate 2FA confirmation. Never commit an npm token
