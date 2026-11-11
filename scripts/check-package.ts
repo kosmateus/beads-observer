@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { posix } from 'node:path';
+import ts from 'typescript';
 
 interface PackPreview {
   files: { path: string }[];
@@ -50,6 +52,49 @@ for (const path of paths) {
     `Unexpected published file: ${path}`,
   );
   assert.ok(!path.includes('Zone.Identifier'), `Windows metadata: ${path}`);
+  if (path.endsWith('.js')) {
+    const source = ts.createSourceFile(
+      path,
+      readFileSync(path, 'utf8'),
+      ts.ScriptTarget.ES2022,
+      true,
+    );
+    const checkImport = (specifier: string): void => {
+      if (specifier.startsWith('.')) {
+        const dependency = posix.normalize(
+          posix.join(posix.dirname(path), specifier),
+        );
+        assert.ok(
+          paths.has(dependency),
+          `${path} imports an unpackaged file: ${dependency}`,
+        );
+      } else {
+        assert.ok(
+          specifier.startsWith('node:') || specifier === '@opencode/plugin',
+          `${path} imports an unexpected runtime dependency: ${specifier}`,
+        );
+      }
+    };
+    const visit = (node: ts.Node): void => {
+      if (
+        (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+        node.moduleSpecifier &&
+        ts.isStringLiteral(node.moduleSpecifier)
+      ) {
+        checkImport(node.moduleSpecifier.text);
+      }
+      if (
+        ts.isCallExpression(node) &&
+        node.expression.kind === ts.SyntaxKind.ImportKeyword
+      ) {
+        const argument = node.arguments[0];
+        if (argument && ts.isStringLiteral(argument))
+          checkImport(argument.text);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
 }
 console.log(
   `Package allowlist verified: ${paths.size} files, ${pack.unpackedSize} bytes unpacked.`,
