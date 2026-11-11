@@ -52,7 +52,7 @@ for (const path of paths) {
     `Unexpected published file: ${path}`,
   );
   assert.ok(!path.includes('Zone.Identifier'), `Windows metadata: ${path}`);
-  if (path.endsWith('.js')) {
+  if (path.endsWith('.js') || path.endsWith('.d.ts')) {
     const source = ts.createSourceFile(
       path,
       readFileSync(path, 'utf8'),
@@ -68,6 +68,12 @@ for (const path of paths) {
           paths.has(dependency),
           `${path} imports an unpackaged file: ${dependency}`,
         );
+        if (path.endsWith('.d.ts') && dependency.endsWith('.js')) {
+          assert.ok(
+            paths.has(dependency.replace(/\.js$/, '.d.ts')),
+            `${path} imports missing declarations: ${dependency}`,
+          );
+        }
       } else {
         assert.ok(
           specifier.startsWith('node:') || specifier === '@opencode/plugin',
@@ -90,6 +96,13 @@ for (const path of paths) {
         const argument = node.arguments[0];
         if (argument && ts.isStringLiteral(argument))
           checkImport(argument.text);
+      }
+      if (
+        ts.isImportTypeNode(node) &&
+        ts.isLiteralTypeNode(node.argument) &&
+        ts.isStringLiteral(node.argument.literal)
+      ) {
+        checkImport(node.argument.literal.text);
       }
       ts.forEachChild(node, visit);
     };
