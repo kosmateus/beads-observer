@@ -46,7 +46,7 @@ export interface ObserverContext {
   event: {
     subscribe(
       options: RequestOptions,
-    ): AsyncIterable<string | { data?: { sessionID?: string } }>;
+    ): AsyncIterable<string | { type?: string; data?: { sessionID?: string } }>;
   };
 }
 export interface SessionBridge {
