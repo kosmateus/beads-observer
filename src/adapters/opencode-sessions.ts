@@ -93,6 +93,10 @@ export async function observeOpenCodeSessions(
       }
     >(),
     scopeCache = new Map<string, { value: boolean; at: number }>();
+  let activitySnapshot: Activity | null = null,
+    activityError = 'Activity has not been read',
+    activityAt: number | null = null,
+    activityRevision = 0;
   let persisted = '',
     catalogCursor: string | undefined;
   // Metadata/activity remain cheap and parallel; never overlap full snapshots.
@@ -194,21 +198,30 @@ export async function observeOpenCodeSessions(
     if (closed || pending) return pending;
     pending = (async () => {
       const warnings: string[] = [];
-      let active: Activity | null = null;
-      try {
-        active = data(
-          await (ctx.session.active
-            ? ctx.session.active()
-            : api.active({ signal: controller.signal })),
-        );
-        if (!active || typeof active !== 'object' || Array.isArray(active))
-          throw Error('Invalid session.active response');
-      } catch (error) {
-        active = null;
-        warnings.push(
-          'Session activity unavailable: ' + (error as Error).message,
-        );
+      if (activityAt === null || Date.now() - activityAt >= 5000) {
+        const revision = activityRevision;
+        try {
+          activitySnapshot = data(
+            await (ctx.session.active
+              ? ctx.session.active()
+              : api.active({ signal: controller.signal })),
+          );
+          if (
+            !activitySnapshot ||
+            typeof activitySnapshot !== 'object' ||
+            Array.isArray(activitySnapshot)
+          )
+            throw Error('Invalid session.active response');
+          activityError = '';
+        } catch (error) {
+          activitySnapshot = null;
+          activityError = (error as Error).message;
+        }
+        activityAt = revision === activityRevision ? Date.now() : null;
       }
+      const active = activitySnapshot;
+      if (active === null)
+        warnings.push('Session activity unavailable: ' + activityError);
       if (Date.now() - issueAt > 30000) {
         try {
           known = new Set(
@@ -589,6 +602,17 @@ export async function observeOpenCodeSessions(
           if (closed) break;
           const event = typeof raw === 'string' ? JSON.parse(raw) : raw;
           if (event.data?.sessionID) {
+            if (
+              /^session\.(created|moved|deleted|text\.ended|execution\.(started|succeeded|failed|interrupted))$/.test(
+                event.type || '',
+              ) ||
+              (event.type === 'session.text.delta' &&
+                activitySnapshot !== null &&
+                !activitySnapshot[event.data.sessionID])
+            ) {
+              activityRevision++;
+              activityAt = null;
+            }
             const known = metadataCache.get(event.data.sessionID);
             const moved = /^session\.(created|moved)$/.test(event.type || '');
             if (

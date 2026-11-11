@@ -46,10 +46,13 @@ caches to evict an already failed session; a same-clock token then proves a
 metadata miss without another diff RPC. The small failure marker lives with the
 existing session record, not in another growing cache or a retry-TTL table.
 The RPC-budget fixture warms seven active and 260 historical sessions, then
-streams tokens for 10 seconds. It allows at most 54 metadata reads (14 active
-and two 20-session historical sweeps), exactly 14 active-context snapshots and
-no diff requests. Known foreign tokens cause no metadata reads, while moved
-sessions and unknown children are discovered immediately. Metadata cache size
+streams tokens for 10 seconds. It counts `active`, `list`, `get`, `context` and
+`diff` separately: at most two activity reads, zero catalog reads, at most 54
+metadata reads (14 active and two 20-session historical sweeps), exactly 14
+active-context snapshots and no diff requests. Completion/start/move/new-child
+events invalidate the activity snapshot immediately; token updates reuse it.
+Known foreign tokens cause no metadata reads, while moved sessions and unknown
+children are discovered immediately. Metadata cache size
 is capped at 600 entries: local info is reused for 5 seconds and negative
 membership for 30 seconds, with lifecycle/move invalidation. Stable idle records
 with an unchanged host revision retain their existing logs and diff without

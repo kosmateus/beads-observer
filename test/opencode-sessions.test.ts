@@ -99,10 +99,12 @@ test('V2 envelopes without active/diff context methods; independent child, chang
     active = {};
     infos.child.outcome = 'interrupted';
     infos.child.time.updated++;
+    now += 5000;
     await observer.refresh();
     records = await readSessionRecords(directory, 'project');
     assert.equal(records[0].status, 'interrupted');
     fail = true;
+    now += 5000;
     await observer.refresh();
     records = await readSessionRecords(directory, 'project');
     assert.equal(records[0].status, 'unknown');
