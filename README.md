@@ -1,38 +1,44 @@
 # Beads Observer
 
-Lokalny panel zadań [Beads](https://github.com/gastownhall/beads) i plugin
-**OpenCode 2**. Tablica, listy, graf zależności, epiki, aktywność agentów oraz
-podgląd powiązanych sesji OpenCode. Interfejs w 24 językach UE, z jasnym,
-ciemnym i systemowym motywem. Bez CDN i zależności produkcyjnych npm.
+A local dashboard for [Beads](https://github.com/gastownhall/beads) and an
+**OpenCode 2** plugin. Browse boards, lists, dependency graphs, epics, agent
+activity and explicitly linked OpenCode sessions. The interface supports all
+24 official EU languages, light/dark themes and system preferences.
 
-## Instalacja
+Written in **TypeScript**, with a compiled Node.js CLI and browser UI. No
+production npm dependencies, remote fonts or runtime CDN requests.
 
-Wymagania: **Node.js 22+**, npm oraz Beads CLI `bd` dla rzeczywistych projektów.
-Projekt musi mieć zainicjalizowane Beads (`bd init`).
+## Requirements
+
+- **Node.js 22+** and npm.
+- The Beads CLI (`bd`) and an initialized Beads project for real data.
+- **OpenCode 2** for plugin integration. Standalone mode does not require OpenCode.
+
+## Install the CLI
 
 ```sh
 npm install --global @opentoria/beads-observer
-cd /sciezka/do/projektu
+cd /path/to/your/project
 beads-observer open
 ```
 
-Panel działa domyślnie na **http://127.0.0.1:4317**. `open` otwiera przeglądarkę
-i rejestruje projekt; pozostaw proces uruchomiony, jeśli nie obsługuje go już
-inna instancja. W SSH otwórz adres przez bezpieczne przekierowanie portu.
+The default address is **http://127.0.0.1:4317**. The `open` command opens your
+browser and registers the current project. Keep it running unless another
+instance already serves that project. For SSH, use a secure port forward.
 
 ```sh
 beads-observer --help
-beads-observer --cwd /projekty/backend --port 4318
-beads-observer --project /projekty/backend --project /projekty/frontend
+beads-observer --cwd /projects/backend --port 4318
+beads-observer --project /projects/backend --project /projects/frontend
 beads-observer --demo
 ```
 
-Tryb demonstracyjny używa danych w pamięci i nie wymaga Beads.
+Demo mode uses in-memory data and does not require Beads.
 
-## Plugin OpenCode 2
+## OpenCode 2 plugin
 
-Dodaj wpis do istniejącego `opencode.json` lub `opencode.jsonc`, zachowując
-pozostałe pluginy i ustawienia:
+Add the package to your existing `opencode.json` or `opencode.jsonc`, preserving
+other plugins and settings:
 
 ```json
 {
@@ -50,60 +56,63 @@ pozostałe pluginy i ustawienia:
 }
 ```
 
-OpenCode pobiera pakiet z npm; globalna instalacja CLI nie jest konieczna
-dla samego pluginu. Konfiguracja przeładowuje się automatycznie; można wymusić
-przeładowanie poleceniem `/reload`.
+OpenCode installs the package from npm; a global CLI installation is not needed
+for plugin use. Configuration reloads automatically; `/reload` forces a reload.
 
-- `/beads-observer` otwiera panel bieżącego projektu.
-- `/beads-observer ID-ZADANIA` wiąże bieżącą sesję z zadaniem i otwiera szczegóły.
-- Instancje tego samego użytkownika mogą współdzielić serwer na jednym porcie.
+- `/beads-observer` opens the current project's board.
+- `/beads-observer ISSUE-ID` links the current session to that issue and opens its details.
+- Multiple instances owned by the same user can share one local server.
 
-Plugin używa API `@opencode/plugin` dla OpenCode 2. Nie jest przeznaczony
-dla OpenCode 1. Podgląd sesji wymaga zgodnego API hosta; testy adapterów nie
-zastępują pełnego testu w rzeczywistej instancji OpenCode.
+This plugin uses the OpenCode 2 `@opencode/plugin` API, not the OpenCode 1 API.
+Session views require compatible host APIs. Adapter tests are not a substitute
+for an end-to-end test in a real OpenCode installation.
 
-### Opcje
+### Options
 
-| Opcja              | Domyślna                   | Znaczenie                                                       |
-| ------------------ | -------------------------- | --------------------------------------------------------------- |
-| `port`             | `4317`                     | Port lokalnego serwera.                                         |
-| `pollIntervalMs`   | `2000`                     | Interwał odczytu Beads, minimum 500 ms.                         |
-| `bdPath`           | `bd`                       | Program Beads CLI lub jego absolutna ścieżka.                   |
-| `cwd`              | katalog projektu OpenCode  | Projekt Beads.                                                  |
-| `project`          | nazwa katalogu             | Nazwa projektu w panelu.                                        |
-| `projects`         | `[]`                       | Dodatkowe ścieżki lub obiekty `{ "cwd": "…", "project": "…" }`. |
-| `timeoutMs`        | `15000`                    | Limit czasu komendy Beads.                                      |
-| `nodePath`         | `node`                     | Node.js 22+ uruchamiający serwer.                               |
-| `runtimeDirectory` | katalog tymczasowy systemu | Prywatne rejestracje współdzielonego serwera.                   |
-| `demo`             | `false`                    | Dane demonstracyjne zamiast bazy Beads.                         |
+| Option             | Default                    | Purpose                                                       |
+| ------------------ | -------------------------- | ------------------------------------------------------------- |
+| `port`             | `4317`                     | Local HTTP port.                                              |
+| `pollIntervalMs`   | `2000`                     | Beads polling interval; at least 500 ms.                      |
+| `bdPath`           | `bd`                       | Beads executable name or absolute path.                       |
+| `cwd`              | OpenCode project directory | Beads project directory.                                      |
+| `project`          | Directory name             | Project display name.                                         |
+| `projects`         | `[]`                       | Additional paths or `{ "cwd": "…", "project": "…" }` entries. |
+| `timeoutMs`        | `15000`                    | Beads command timeout.                                        |
+| `nodePath`         | `node`                     | Node.js 22+ executable for the shared server.                 |
+| `runtimeDirectory` | System temporary directory | Parent directory for private runtime registrations.           |
+| `demo`             | `false`                    | Use demonstration data instead of a Beads database.           |
 
-## Funkcje i granice
+## Features and limitations
 
-- Tablica i listy z filtrami, priorytetami, przypisaniem agentów i hierarchią epików.
-- Graf rozróżnia relacje blokowania oraz rodzic–dziecko; gotowość pochodzi z Beads.
-- Tworzenie zadań i epików, edycja tytułu/opisu/priorytetu oraz dodawanie relacji.
-- Szczegóły, komentarze i historia zachowanych zdarzeń Beads.
-- Profile agentów i podgląd logów oraz diffów jawnie powiązanych sesji OpenCode.
-- Osobne dane i preferencje wielu projektów; aktualizacje panelu przez SSE.
+- Boards and lists with filters, priorities, assignees and epic hierarchy.
+- Dependency graphs that distinguish blockers from parent–child relationships.
+- Issue/epic creation, title/description/priority editing and dependency creation.
+- Details, comments and retained Beads audit events.
+- Agent profiles and logs/diffs from explicitly linked OpenCode sessions.
+- Isolated project data/preferences and server-sent updates.
 
-Status zadań i przypisanie agentów pozostają zarządzane przez Beads/agentów.
-Historia obejmuje tylko zachowane zdarzenia, a nie gwarantowany pełny audyt.
-Nie ma sprintów, SLA, zdalnego logowania ani uprawnień zespołowych.
+Beads remains authoritative for readiness and blockers. Agents/Beads manage
+issue status and assignment. History includes retained events, not a guaranteed
+complete audit trail. There are no sprints, SLAs, remote authentication or team
+permission controls.
 
-## Bezpieczeństwo i prywatność
+## Security and privacy
 
-Serwer nasłuchuje wyłącznie na `127.0.0.1`. Nie wystawiaj go publicznie.
-Zapisy wymagają zgodnego Origin, tokenu sesji i walidowanego JSON; komendy CLI
-nie są wykonywane przez powłokę. Sesje mogą zawierać wrażliwe logi i diffy:
-są przechowywane lokalnie w prywatnym katalogu runtime, nie wysyłane do npm
-ani GitHub. Reset bazy w panelu jest operacją destrukcyjną, wymaga osobnego
-potwierdzenia i powinien być wykonywany dopiero po zatrzymaniu agentów.
+The server binds to **127.0.0.1 only**. Do not expose it publicly. Writes require
+matching Origin, a session token and validated JSON. CLI commands use argument
+arrays, not a shell. Session logs and diffs can contain sensitive information;
+they stay in a private local runtime directory and are not uploaded to npm or
+GitHub. Database reset is destructive, requires separate confirmation, and
+should only be used after stopping active agents.
 
-Lokalne bazy `.beads`, konfiguracje narzędzi, archiwa i metadane Windows są
-ignorowane przez Git. Paczka npm zawiera wyłącznie jawnie dopuszczone pliki
-runtime, licencję, przykład konfiguracji i README.
+Local `.beads` databases, credentials, editor settings, archives and Windows
+download metadata are ignored by Git. The npm package includes only compiled
+runtime files, declarations, static assets, the license, README and example config.
 
-## Rozwój i weryfikacja
+## Development
+
+Use Node.js **24.10+** (recommended) or **22.22.1+** for the development tooling.
+The compiled CLI and plugin support Node.js 22+.
 
 ```sh
 git clone https://github.com/kosmateus/beads-observer.git
@@ -112,41 +121,61 @@ npm ci
 npm run check
 ```
 
-| Polecenie              | Działanie                                         |
-| ---------------------- | ------------------------------------------------- |
-| `npm run lint`         | ESLint; ostrzeżenia powodują błąd.                |
-| `npm run lint:fix`     | Automatyczne poprawki ESLint.                     |
-| `npm run format`       | Formatowanie Prettier.                            |
-| `npm run format:check` | Kontrola formatowania bez zapisu.                 |
-| `npm run build`        | Walidacja składni JS i wymaganych plików runtime. |
-| `npm test`             | Testy automatyczne Node.js.                       |
-| `npm run pack:check`   | Kontrola listy plików paczki npm.                 |
-| `npm run demo`         | Lokalny panel demonstracyjny.                     |
+| Command                | Purpose                                                |
+| ---------------------- | ------------------------------------------------------ |
+| `npm run lint`         | ESLint with TypeScript rules; warnings fail the check. |
+| `npm run lint:fix`     | Apply safe ESLint fixes.                               |
+| `npm run format`       | Format with Prettier.                                  |
+| `npm run format:check` | Check formatting without editing files.                |
+| `npm run typecheck`    | Strict TypeScript checking without emitting files.     |
+| `npm run build`        | Compile TypeScript and stage static assets in `dist/`. |
+| `npm test`             | Build and run automated Node.js tests.                 |
+| `npm run pack:check`   | Verify the npm package file allowlist after building.  |
+| `npm run demo`         | Build and start the demonstration dashboard.           |
 
-Kod jest natywnym ESM, bez kompilacji i bundlera. `npm pack` wykonuje build
-przez `prepack`. Testy `test/*.test.js` nie wymagają działającego OpenCode.
-Skrypty `test/*.mjs` dla rzeczywistego hosta/przeglądarki są testami ręcznymi,
-nie częścią domyślnego CI.
+Source code lives in `index.ts`, `src/`, `web/`, `test/` and `scripts/`.
+JavaScript under `dist/` is generated and is not committed. Tests are compiled
+to `dist/test/`; manual live-host/browser checks are not run by default CI.
 
-`npm ci` instaluje hooki Husky. Przed commitem `lint-staged` uruchamia ESLint
-z automatycznymi poprawkami i Prettiera wyłącznie na staged plikach; błędy
-niepoprawialne automatycznie blokują commit. Przed pushem ESLint i Prettier
-sprawdzają cały projekt bez zmieniania plików. GitHub CI ponawia kontrole,
-ponieważ lokalne hooki nie stanowią zabezpieczenia gałęzi.
+### Formatting and Git hooks
 
-## Publikacja
+Prettier uses two spaces, 80-column wrapping, semicolons, single quotes, trailing
+commas, parenthesized arrow arguments and LF line endings. ESLint combines the
+recommended JavaScript/TypeScript rules with checks for unused variables,
+strict equality, accidental `var` declarations and unsafe eval.
 
-GitHub Actions uruchamia lint, formatowanie, build, testy i kontrolę paczki.
-Wymagany check `CI gate` chroni `main`, a zmiany przechodzą przez squash PR.
-Scalenie PR uruchamia wydanie według Conventional Commits; workflow `Release`
-można też uruchomić ręcznie. Wersja i tag powstają przez semantic-release,
-bez bezpośredniego commita do chronionego `main`.
+`npm ci` installs Husky hooks:
 
-Publikacja używa npm Trusted Publishing (OIDC), bez tokenu npm w repozytorium.
-Po pierwszej publikacji opiekun musi skonfigurować zaufanego wydawcę pakietu:
-GitHub `kosmateus/beads-observer`, workflow `release.yml`, bez environment.
-Pierwsza publikacja nowego pakietu wymaga konta npm z dostępem do `opentoria`.
+- **Pre-commit:** lint-staged runs ESLint fixes and Prettier on staged files only.
+  Errors that cannot be fixed automatically block the commit.
+- **Pre-push:** ESLint, Prettier and TypeScript check the project without edits.
 
-## Licencja
+GitHub CI repeats these checks; local hooks are not a branch security boundary.
+
+## Releases
+
+The `main` branch requires a squash PR and a successful **CI gate**. CI checks
+lint, formatting, types, build, tests and package contents on Node.js 22 and 24.
+Merged PRs trigger semantic-release; Conventional Commits determine the version,
+with at least a patch release for new commits. Maintainers can also run the
+`Release` workflow manually. Release tags and GitHub assets are created without
+pushing a version commit directly to protected `main`.
+
+Publishing uses **npm Trusted Publishing (OIDC)**, not a stored npm token. After
+the initial authenticated publication, configure the package's trusted publisher
+for GitHub repository `kosmateus/beads-observer`, workflow `release.yml`, with
+no environment requirement. The first publication requires npm access to the
+`opentoria` organization and may require interactive 2FA.
+
+Maintainers can configure that trust relationship after the package exists:
+
+```sh
+npm trust github @opentoria/beads-observer --repo kosmateus/beads-observer --file release.yml --yes
+```
+
+This command may require a separate 2FA confirmation. Never commit an npm token
+or disable account 2FA to make a release work.
+
+## License
 
 [MIT](LICENSE).
