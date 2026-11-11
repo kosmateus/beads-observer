@@ -111,6 +111,9 @@ runtime files, declarations, static assets, the license, README and example conf
 
 ## Development
 
+Use Node.js **24.10+** (recommended) or **22.22.1+** for the development tooling.
+The compiled CLI and plugin support Node.js 22+.
+
 ```sh
 git clone https://github.com/kosmateus/beads-observer.git
 cd beads-observer
@@ -163,6 +166,15 @@ the initial authenticated publication, configure the package's trusted publisher
 for GitHub repository `kosmateus/beads-observer`, workflow `release.yml`, with
 no environment requirement. The first publication requires npm access to the
 `opentoria` organization and may require interactive 2FA.
+
+Maintainers can configure that trust relationship after the package exists:
+
+```sh
+npm trust github @opentoria/beads-observer --repo kosmateus/beads-observer --file release.yml --yes
+```
+
+This command may require a separate 2FA confirmation. Never commit an npm token
+or disable account 2FA to make a release work.
 
 ## License
 
