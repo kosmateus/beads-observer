@@ -12,7 +12,7 @@ production npm dependencies, remote fonts or runtime CDN requests.
 
 - **Node.js 22+** and npm.
 - The Beads CLI (`bd`) and an initialized Beads project for real data.
-- **OpenCode 2** for plugin integration. Standalone mode does not require OpenCode.
+- **OpenCode 2.2.5+** for plugin integration (tested with SDK 2.2.5). Standalone mode does not require OpenCode.
 
 ## Install the CLI
 
@@ -23,8 +23,10 @@ beads-observer open
 ```
 
 The default address is **http://127.0.0.1:4317**. The `open` command opens your
-browser and registers the current project. Keep it running unless another
-instance already serves that project. For SSH, use a secure port forward.
+browser and registers the current project. On Linux it uses `xdg-open`; on
+macOS it uses `open`; on Windows and WSL it uses the native Windows URL handler.
+If no graphical browser is available (for example, in a headless SSH session),
+the command prints a URL to open manually. For SSH, use a secure port forward.
 
 ```sh
 beads-observer --help

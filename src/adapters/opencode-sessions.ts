@@ -86,16 +86,40 @@ export async function observeOpenCodeSessions(
     controller = new AbortController();
   const contextCache = new Map<
       string,
-      { revision?: string; messages: SessionMessage[]; diffs?: SessionDiff[] }
+      {
+        revision?: string;
+        location: string;
+        at: number;
+        messages: SessionMessage[];
+        diffs?: SessionDiff[];
+        diffKey?: string;
+        diffScope?: string;
+        diffAt?: number;
+        diffError?: string;
+        permanent?: boolean;
+      }
     >(),
     remembered = new Map<string, SessionLink>(),
     dirty = new Set<string>(),
+    urgent = new Set<string>(),
+    mutations = new Map<string, number>(),
     scopeCache = new Map<string, { value: boolean; at: number }>();
   let persisted = '',
     catalogCursor: string | undefined;
+  // Metadata/activity remain cheap and parallel; never overlap full snapshots.
+  let heavyRead: Promise<unknown> = Promise.resolve();
+  function heavy<T>(work: () => Promise<T>): Promise<T> {
+    const result = heavyRead.then(() => {
+      if (closed) throw Error('Session observer closed');
+      return work();
+    });
+    heavyRead = result.catch(() => {});
+    return result;
+  }
   let closed = false,
     pending: Promise<void> | null = null,
     timer: ReturnType<typeof setTimeout> | null = null,
+    timerAt = 0,
     known = new Set<string>(),
     issueMetadataLinks = new Map<string, string[]>(),
     catalogAt = 0,
@@ -180,7 +204,7 @@ export async function observeOpenCodeSessions(
       manual: [...manual],
       automatic: [...remembered]
         .slice(-500)
-        .map(([id, link]) => [id, { ...link }, history.get(id) || []]),
+        .map(([id, link]) => [id, { ...link }, history.get(id)!]),
     };
     const signature = JSON.stringify(value);
     if (signature !== persisted) {
@@ -252,7 +276,11 @@ export async function observeOpenCodeSessions(
       }
       const sessions = new Map<
           string,
-          { info: ObserverSessionInfo; messages: SessionMessage[] }
+          {
+            info: ObserverSessionInfo;
+            messages: SessionMessage[];
+            cached: NonNullable<ReturnType<typeof contextCache.get>>;
+          }
         >(),
         failed = new Set<string>(),
         staleLocations = new Set<string>(),
@@ -265,25 +293,39 @@ export async function observeOpenCodeSessions(
             failed.add(sessionID);
             return;
           }
-          const cached = contextCache.get(sessionID);
+          let cached = contextCache.get(sessionID);
           const revision = JSON.stringify(info.time);
-          const messages =
-            cached?.revision === revision &&
-            !active?.[sessionID] &&
-            !dirty.has(sessionID)
-              ? cached.messages
-              : data(await ctx.session.context({ sessionID }));
+          const location = JSON.stringify(info.location);
+          const force = urgent.delete(sessionID);
+          const changed = dirty.delete(sessionID);
+          const stopped =
+            active !== null &&
+            previousActive.includes(sessionID) &&
+            !active[sessionID];
+          if (cached?.location !== location) cached = undefined;
+          const reuse =
+            cached &&
+            !force &&
+            !stopped &&
+            (active === null || active[sessionID]
+              ? clock() - cached.at < 5000
+              : cached.revision === revision && !changed);
+          const messages = reuse
+            ? cached!.messages
+            : data(await heavy(() => ctx.session.context({ sessionID })));
           if (!Array.isArray(messages))
             throw Error('Invalid session.context response');
-          contextCache.set(sessionID, {
+          const snapshot = {
+            ...cached,
             revision,
+            location,
+            at: reuse ? cached!.at : clock(),
             messages,
-            diffs: cached?.diffs,
-          });
-          dirty.delete(sessionID);
+          };
+          contextCache.set(sessionID, snapshot);
           if (contextCache.size > 128)
             contextCache.delete(contextCache.keys().next().value!);
-          sessions.set(sessionID, { info, messages });
+          sessions.set(sessionID, { info, messages, cached: snapshot });
           sessionWarnings.delete(sessionID);
         } catch (error) {
           failed.add(sessionID);
@@ -315,7 +357,6 @@ export async function observeOpenCodeSessions(
         ],
         load,
       );
-      previousActive = active === null ? [] : Object.keys(active);
       const linkSessions = new Map(
         [...sessions].map(([id, session]) => [
           id,
@@ -329,7 +370,8 @@ export async function observeOpenCodeSessions(
         remembered,
         issueMetadataLinks,
       );
-      await parallel([...sessions], async ([sessionID, { info, messages }]) => {
+      await parallel([...sessions], async ([sessionID, session]) => {
+        const { info, messages, cached } = session;
         if (closed) return;
         const link = links.get(sessionID);
         const previous = history.get(sessionID) || [];
@@ -350,30 +392,96 @@ export async function observeOpenCodeSessions(
           localWarnings.push(
             'Several Beads IDs found; no current task selected automatically',
           );
-        const cached = contextCache.get(sessionID) || { messages: [] },
-          old = records.get(sessionID);
         let diffs = cached.diffs || [];
-        if (
-          !old ||
-          (old.time as ObserverSessionInfo['time'])?.updated !==
-            info.time?.updated ||
-          active?.[sessionID]
-        ) {
-          diffs = await (
-            ctx.session.diff
-              ? ctx.session.diff({ sessionID, context: 3 })
-              : api.diff(
-                  { sessionID, context: 3 },
-                  { signal: controller.signal },
+        // Ignore text/output deltas and known read-only tools. Unknown tools
+        // can write files too (not just patch), so retain their terminal state.
+        // A bounded fallback covers writes inside a still-running shell/execute.
+        const tools = messages.flatMap((message) =>
+          message.type === 'shell' && message.status !== 'running'
+            ? [[message.id, message.status, message.command, message.exit]]
+            : (message.content || [])
+                .filter(
+                  (part) =>
+                    part.type === 'tool' &&
+                    ['completed', 'error'].includes(part.state?.status || '') &&
+                    !/^(read|glob|grep|list|webfetch|websearch)$/.test(
+                      part.name || '',
+                    ),
                 )
-          )
-            .then(data)
-            .catch((error) => {
-              localWarnings.push('Diff: ' + error.message);
-              return cached.diffs || [];
-            });
-          cached.diffs = diffs;
+                .map((part) => [
+                  message.id,
+                  part.id,
+                  part.name,
+                  part.state?.status,
+                  part.state?.input,
+                ]),
+        );
+        const runningTool = messages.some(
+          (message) =>
+            (message.type === 'shell' && message.status === 'running') ||
+            message.content?.some(
+              (part) =>
+                part.type === 'tool' && part.state?.status === 'running',
+            ),
+        );
+        const diffScope = JSON.stringify([
+          cached.location,
+          messages.filter((message) => message.type === 'user').at(-1)?.id,
+        ]);
+        if (cached.diffScope && cached.diffScope !== diffScope) {
+          cached.permanent = false;
+          cached.diffError = undefined;
         }
+        const diffKey = JSON.stringify([
+          diffScope,
+          tools,
+          mutations.get(sessionID) || 0,
+          info.outcome,
+          active === null
+            ? previousActive.includes(sessionID)
+            : Boolean(active[sessionID]),
+        ]);
+        // The default endpoint's turn range cannot be repaired by another tool
+        // call. Keep a 400 unavailable until location/range is actually changed
+        // (a new user message ID selects a new turn); never retry on token/tools.
+        const due =
+          !cached.permanent &&
+          (cached.diffKey !== diffKey ||
+            (clock() - cached.diffAt! >= 30000 &&
+              (cached.diffError || runningTool)));
+        const coolingDown =
+          cached.diffError &&
+          !cached.permanent &&
+          clock() - cached.diffAt! < 30000;
+        if (due && !coolingDown) {
+          cached.diffKey = diffKey;
+          cached.diffScope = diffScope;
+          cached.diffAt = clock();
+          try {
+            diffs = data(
+              await heavy(() =>
+                ctx.session.diff
+                  ? ctx.session.diff({ sessionID, context: 3 })
+                  : api.diff(
+                      { sessionID, context: 3 },
+                      { signal: controller.signal },
+                    ),
+              ),
+            );
+            cached.diffs = diffs;
+            cached.diffError = undefined;
+            cached.permanent = false;
+          } catch (error) {
+            const failure = error as Error & { status?: number };
+            cached.diffError = 'Diff unavailable: ' + failure.message;
+            cached.permanent =
+              failure.status === 400 ||
+              /HTTP 400|Turn range spans a location change/.test(
+                failure.message,
+              );
+          }
+        }
+        if (cached.diffError) localWarnings.push(cached.diffError);
         const record = {
           ...sessionView(
             info,
@@ -394,6 +502,7 @@ export async function observeOpenCodeSessions(
         records.set(sessionID, record);
         await atomicJSON(filename(sessionID), record);
       });
+      previousActive = active === null ? [] : Object.keys(active);
       await persist().catch((error) =>
         warnings.push('Session storage: ' + error.message),
       );
@@ -427,17 +536,30 @@ export async function observeOpenCodeSessions(
     })().finally(() => {
       pending = null;
       if (dirty.size) schedule();
+      else {
+        const now = clock();
+        const deadlines = previousActive.flatMap((id) => {
+          const cached = contextCache.get(id);
+          return cached
+            ? [cached.at + 5000 > now ? cached.at + 5000 : now + 5000]
+            : [];
+        });
+        if (deadlines.length) schedule(Math.min(...deadlines) - now);
+      }
     });
     return pending;
   }
-  function schedule() {
-    if (!closed && !timer) {
+  function schedule(delay = 500) {
+    const at = clock() + delay;
+    if (!closed && (!timer || at < timerAt)) {
+      if (timer) clearTimeout(timer);
+      timerAt = at;
       timer = setTimeout(() => {
         timer = null;
         void update().catch((error) =>
           console.warn('[beads.observer] Session refresh: ' + error.message),
         );
-      }, 500);
+      }, delay);
       timer.unref?.();
     }
   }
@@ -454,6 +576,18 @@ export async function observeOpenCodeSessions(
           const event = typeof raw === 'string' ? JSON.parse(raw) : raw;
           if (event.data?.sessionID) {
             dirty.add(event.data.sessionID);
+            if (
+              /^session\.(tool\.(success|failed)|shell\.ended|moved|revert\.(committed|cleared)|execution\.(succeeded|failed|interrupted))$/.test(
+                event.type || '',
+              )
+            ) {
+              urgent.add(event.data.sessionID);
+              if (!/^session\.(tool\.|shell\.)/.test(event.type || ''))
+                mutations.set(
+                  event.data.sessionID,
+                  (mutations.get(event.data.sessionID) || 0) + 1,
+                );
+            }
             schedule();
           }
         }

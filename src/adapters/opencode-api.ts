@@ -48,7 +48,19 @@ export function openCodeAPI({
           }
         : {},
     });
-    if (!response.ok) throw Error(`OpenCode API HTTP ${response.status}`);
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as {
+        message?: unknown;
+      } | null;
+      const detail =
+        typeof body?.message === 'string' ? ': ' + body.message : '';
+      throw Object.assign(
+        Error(`OpenCode API HTTP ${response.status}${detail}`),
+        {
+          status: response.status,
+        },
+      );
+    }
     return response.json();
   }
   async function discover(signal: AbortSignal) {
@@ -136,7 +148,7 @@ export function openCodeAPI({
     try {
       return await request<T>(target.url, path, target.password, combined);
     } catch (error) {
-      endpoint = null;
+      if (!((error as { status?: number }).status === 400)) endpoint = null;
       throw error;
     }
   }

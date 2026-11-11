@@ -8,7 +8,9 @@ import { readSessionRecords } from '../src/adapters/session-records.js';
 import type { ObserverContext } from '../src/adapters/opencode-types.js';
 import { memoryStorage } from './fixtures.js';
 
-test('V2 envelopes without active/diff context methods; independent child, change, unknown and cleanup', async () => {
+test('V2 envelopes without active/diff context methods; independent child, change, unknown and cleanup', async (t) => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
   const directory = await mkdtemp(join(tmpdir(), 'observer-session-test-'));
   let active: Record<string, { type: string }> = { child: { type: 'running' } };
   let task = 'test-a',
@@ -89,6 +91,7 @@ test('V2 envelopes without active/diff context methods; independent child, chang
     assert.ok(Array.isArray(childRecord.diffs));
     assert.equal(childRecord.diffs[0].file, 'a.js');
     task = 'test-b';
+    now += 5000; // Active log snapshots are bounded independently of token events.
     infos.child.time.updated++;
     await observer.refresh();
     records = await readSessionRecords(directory, 'project');

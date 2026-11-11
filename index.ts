@@ -2,6 +2,7 @@ import { observeOpenCodeSessions } from './src/adapters/opencode-sessions.js';
 import { canonicalProject } from './src/bootstrap/server.js';
 import { BeadsSource } from './src/adapters/beads-cli.js';
 import { openBrowser } from './src/adapters/browser.js';
+import { sessionNotification } from './src/adapters/opencode-notification.js';
 import { projectCommand } from './src/application/open-project.js';
 import { Plugin } from '@opencode/plugin';
 import { acquireSharedHub } from './src/bootstrap/shared-hub.js';
@@ -62,6 +63,7 @@ export default Plugin.define({
             url: hub.url,
             projectId: currentProject.id,
             open: openBrowser,
+            notify: sessionNotification(ctx.session),
             bind: sessionBridge
               ? async (sessionID, issueId) => {
                   await source.detail(issueId);
