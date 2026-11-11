@@ -85,13 +85,17 @@ export async function observeOpenCodeSessions(
   // Metadata/activity remain cheap and parallel; never overlap full snapshots.
   let heavyRead: Promise<unknown> = Promise.resolve();
   function heavy<T>(work: () => Promise<T>): Promise<T> {
-    const result = heavyRead.then(work);
+    const result = heavyRead.then(() => {
+      if (closed) throw Error('Session observer closed');
+      return work();
+    });
     heavyRead = result.catch(() => {});
     return result;
   }
   let closed = false,
     pending: Promise<void> | null = null,
     timer: ReturnType<typeof setTimeout> | null = null,
+    timerAt = 0,
     known = new Set<string>(),
     catalogAt = 0,
     issueAt = 0,
@@ -164,7 +168,7 @@ export async function observeOpenCodeSessions(
       manual: [...manual],
       automatic: [...remembered]
         .slice(-500)
-        .map(([id, link]) => [id, { ...link }, history.get(id) || []]),
+        .map(([id, link]) => [id, { ...link }, history.get(id)!]),
     };
     const signature = JSON.stringify(value);
     if (signature !== persisted) {
@@ -466,17 +470,30 @@ export async function observeOpenCodeSessions(
     })().finally(() => {
       pending = null;
       if (dirty.size) schedule();
+      else {
+        const now = Date.now();
+        const deadlines = previousActive.flatMap((id) => {
+          const cached = contextCache.get(id);
+          return cached
+            ? [cached.at + 5000 > now ? cached.at + 5000 : now + 5000]
+            : [];
+        });
+        if (deadlines.length) schedule(Math.min(...deadlines) - now);
+      }
     });
     return pending;
   }
-  function schedule() {
-    if (!closed && !timer) {
+  function schedule(delay = 500) {
+    const at = Date.now() + delay;
+    if (!closed && (!timer || at < timerAt)) {
+      if (timer) clearTimeout(timer);
+      timerAt = at;
       timer = setTimeout(() => {
         timer = null;
         void update().catch((error) =>
           console.warn('[beads.observer] Session refresh: ' + error.message),
         );
-      }, 500);
+      }, delay);
       timer.unref?.();
     }
   }

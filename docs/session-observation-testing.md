@@ -6,29 +6,28 @@ No live OpenCode instance, browser, Beads database or network API is exercised.
 
 The command compiles isolated tests with TypeScript source maps and inline source
 content into ignored `coverage/build/`, then collects Node's native line and
-branch counters. It fails unless **100% of executable changed lines and 100% of
-branch counters on changed runtime lines** are covered in:
+branch counters. It fails unless **100% of lines and 100% of branches in each
+entire modified runtime file**, including its pre-existing code, are covered in:
 
 - `src/adapters/opencode-sessions.ts`
 - `src/adapters/opencode-api.ts`
 
-The comparison uses fixed pre-fix commit
-`a27eef5cabc073ae71fd7a2e0bec07325bfb1818`, not the current merge base: otherwise
-the coverage scope would disappear after merging the fix into `main`. A shallow
-checkout fetches this exact commit if needed. There are no coverage-ignore
-directives, percentage rounding or excluded runtime branches. Type-only lines,
-comments and unmapped lines are not executable; their inclusion in a source diff
-does not create executable counters. The older adapter code outside the diff is
-reported by Node as context but is not claimed to have 100% coverage.
+The file list is explicit and stable after merge; this is not a whole-repository
+coverage requirement. There are no coverage-ignore directives, percentage
+rounding or excluded runtime branches. Native Node source-map counters determine
+which TypeScript source lines correspond to executed JavaScript; type-only and
+unmapped lines do not create executable counters. Coverage uses only fixtures,
+mocked filesystem/process boundaries and local fixture HTTP servers, not live
+OpenCode or external services.
 
 Generated reports (all ignored by Git):
 
 - `coverage/observation-coverage.md`: concise scoped report, exact HEAD SHA and
   whether runtime/test/tooling files were dirty.
-- `coverage/observation-coverage.json`: fixed baseline, Node version, source
-  SHA-256 hashes, all changed source line numbers, selected counters and totals.
+- `coverage/observation-coverage.json`: Node version, source SHA-256 hashes,
+  full-file counters and exact totals.
 - `coverage/observation-node-coverage.json`: unfiltered source-mapped Node
-  counters for the two runtime adapters, including old code outside the fix.
+  counters for the two runtime adapters.
 - `coverage/build/**/*.js.map`: mapping from executed JavaScript to the exact
   TypeScript source included in each map.
 
@@ -36,5 +35,8 @@ Run the gate again **after committing** for a report pinned to the clean PR
 head. Test fixtures cover seven-session token storms, deduplication, bounded
 live logs, tool/native-shell changes, read-only and incomplete tool records,
 scope changes, persistent and transient errors, new user turns, final snapshots,
-discovery and HTTP fallback. They never create sessions or inbox messages in a
-running host.
+storage restoration, scope/cache bounds, subscription recovery and HTTP fallback.
+Fake timers verify actual scheduled five-second cadence after semantic events;
+a blocked in-flight context verifies that closing never starts queued RPCs.
+They never create sessions or inbox messages in a running host. Module mocking
+uses Node's `--experimental-test-module-mocks` test-only flag.
