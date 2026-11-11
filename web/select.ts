@@ -5,6 +5,7 @@ import { flagImages } from './flags.js';
 interface Control {
   select: HTMLSelectElement;
   button: HTMLButtonElement;
+  signature: string;
 }
 /** Progressive enhancement: native selects retain values; one portal owns interaction. */
 export function initSelects() {
@@ -33,13 +34,25 @@ export function initSelects() {
     `${option.textContent} ${option.value} ${option.dataset.issueType || ''}`
       .toLocaleLowerCase()
       .includes(query.toLocaleLowerCase());
+  const signature = (select: HTMLSelectElement) =>
+    JSON.stringify(
+      Array.from(select.options, (option) => [
+        option.value,
+        option.textContent,
+        option.disabled,
+        option.selected,
+        option.dataset.issueId,
+        option.dataset.issueTitle,
+        option.dataset.issueType,
+      ]),
+    );
   search.addEventListener('input', () => {
     if (!active) return;
     query = search.value;
     cursor = [...active.select.options].findIndex(
       (o) => !o.disabled && matches(o),
     );
-    paint();
+    paint(true);
     search.focus();
   });
   search.addEventListener('keydown', (event) => {
@@ -68,7 +81,7 @@ export function initSelects() {
               indices.length) %
               indices.length
           ];
-        paint();
+        paint(true);
         search.focus();
       }
     }
@@ -172,8 +185,13 @@ export function initSelects() {
     popup.style.top = up ? 'auto' : rect.bottom + 6 + 'px';
     popup.style.bottom = up ? window.innerHeight - rect.top + 6 + 'px' : 'auto';
   }
-  function paint() {
+  function paint(revealCursor = false) {
     if (!active) return;
+    const previousScroll = popup.scrollTop,
+      restoreSearch = document.activeElement === search,
+      selection = restoreSearch
+        ? [search.selectionStart, search.selectionEnd]
+        : null;
     popup.replaceChildren();
     if (searchable()) {
       search.placeholder = t('search');
@@ -204,9 +222,11 @@ export function initSelects() {
       'aria-activedescendant',
       'select-option-' + cursor,
     );
-    popup
-      .querySelector(`#select-option-${cursor}`)
-      ?.scrollIntoView?.({ block: 'nearest' });
+    if (revealCursor)
+      popup
+        .querySelector(`#select-option-${cursor}`)
+        ?.scrollIntoView?.({ block: 'nearest' });
+    else popup.scrollTop = previousScroll;
     if (!popup.querySelector('.select-option')) {
       const empty = document.createElement('p');
       empty.className = 'select-empty';
@@ -214,6 +234,11 @@ export function initSelects() {
       popup.append(empty);
     }
     position();
+    if (restoreSearch) {
+      search.focus();
+      if (selection && selection[0] !== null && selection[1] !== null)
+        search.setSelectionRange(selection[0], selection[1]);
+    }
   }
   function choose(index: number) {
     if (
@@ -234,14 +259,17 @@ export function initSelects() {
     query = '';
     search.value = '';
     (control.select.closest('dialog') || document.body).append(popup);
+    popup.scrollTop = 0;
     cursor = Math.max(0, control.select.selectedIndex);
     prefix = '';
     popup.hidden = false;
     control.button.setAttribute('aria-expanded', 'true');
-    paint();
+    paint(true);
     if (searchable()) search.focus();
   }
   function sync() {
+    let activeOptionsChanged = false,
+      activeCursorValue: string | undefined;
     for (const [select, control] of controls)
       if (!select.isConnected) {
         if (active === control) close();
@@ -262,7 +290,7 @@ export function initSelects() {
         select.tabIndex = -1;
         select.setAttribute('aria-hidden', 'true');
         select.after(button);
-        control = { select, button };
+        control = { select, button, signature: signature(select) };
         controls.set(select, control);
         button.addEventListener('click', () =>
           active === control ? close() : open(control!),
@@ -304,7 +332,7 @@ export function initSelects() {
                       (at + (e.key === 'ArrowDown' ? 1 : -1) + enabled.length) %
                         enabled.length
                     ];
-            paint();
+            paint(true);
           } else if (
             e.key.length === 1 &&
             !e.ctrlKey &&
@@ -325,11 +353,19 @@ export function initSelects() {
             );
             if (i >= 0) {
               cursor = i;
-              paint();
+              paint(true);
             }
           }
         });
         select.addEventListener('change', sync);
+      }
+      const nextSignature = signature(select);
+      if (control.signature !== nextSignature) {
+        if (active === control) {
+          activeCursorValue = select.options[cursor]?.value;
+          activeOptionsChanged = true;
+        }
+        control.signature = nextSignature;
       }
       label(
         control.button,
@@ -346,7 +382,21 @@ export function initSelects() {
       );
       control.button.title = control.button.textContent || '';
     });
-    if (active) paint();
+    if (activeOptionsChanged && active) {
+      const preservedCursor = activeCursorValue
+        ? Array.from(active.select.options).findIndex(
+            (option) => option.value === activeCursorValue,
+          )
+        : -1;
+      cursor =
+        preservedCursor >= 0
+          ? preservedCursor
+          : Math.min(
+              Math.max(0, active.select.selectedIndex),
+              Math.max(0, active.select.options.length - 1),
+            );
+      paint();
+    }
   }
   document.addEventListener('pointerdown', (e) => {
     if (

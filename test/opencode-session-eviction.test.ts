@@ -43,7 +43,7 @@ test('historical rotation beyond both context and metadata limits retains perman
   const ctx: ObserverContext = {
     storage: memoryStorage(),
     session: {
-      active: async () => ({ active: {} }),
+      active: async () => ({ active: { type: 'running' } }),
       list: async () => historical.map((id) => ({ id })),
       get: async ({ sessionID }) => {
         gets.set(sessionID, (gets.get(sessionID) || 0) + 1);

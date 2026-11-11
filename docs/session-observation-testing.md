@@ -53,7 +53,8 @@ sessions and unknown children are discovered immediately. Metadata cache size
 is capped at 600 entries: local info is reused for 5 seconds and negative
 membership for 30 seconds, with lifecycle/move invalidation. Stable idle records
 with an unchanged host revision retain their existing logs and diff without
-reloading an evicted context. Activity outages mark retained records unknown
-without a compensating historical RPC burst.
+reloading an evicted context. Activity outages mark retained nonterminal records
+unknown without a compensating historical RPC burst; confirmed terminal outcomes
+remain authoritative.
 They never create sessions or inbox messages in a running host. Module mocking
 uses Node's `--experimental-test-module-mocks` test-only flag.

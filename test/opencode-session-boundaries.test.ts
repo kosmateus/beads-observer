@@ -18,6 +18,7 @@ test('session observer storage, scope, failure and lifecycle boundaries are isol
   const writes = new Map<string, Record<string, unknown>>();
   let writeError = false;
   const locations = new Map<string, string | Error>();
+  class MissingBeadsWorkspaceError extends Error {}
   t.mock.module('node:fs/promises', {
     namedExports: {
       ...filesystem,
@@ -45,6 +46,7 @@ test('session observer storage, scope, failure and lifecycle boundaries are isol
           return { path: value || '/different-beads' };
         }
       },
+      MissingBeadsWorkspaceError,
     },
   });
   const { observeOpenCodeSessions } =
@@ -65,7 +67,7 @@ test('session observer storage, scope, failure and lifecycle boundaries are isol
         },
       ],
     ]);
-    let activity: unknown = { one: {} };
+    let activity: unknown = { one: { type: 'running' } };
     let messages: SessionMessage[] = [
       { type: 'user', id: 'user', text: 'test-a' },
     ];
@@ -156,7 +158,7 @@ test('session observer storage, scope, failure and lifecycle boundaries are isol
   for (const id of ['ambiguous', 'stale', 'no-history'])
     automatic.infos.set(id, { id, location: { directory: '/project' } });
   automatic.activity = Object.fromEntries(
-    [...automatic.infos.keys()].map((id) => [id, {}]),
+    [...automatic.infos.keys()].map((id) => [id, { type: 'running' }]),
   );
   automatic.messages = [{ type: 'user', text: 'test-a test-b' }];
   await automatic.ctx.storage.set('beads-observer.sessions.project', {
@@ -213,6 +215,17 @@ test('session observer storage, scope, failure and lifecycle boundaries are isol
     unavailable.activity = value;
     await broken.refresh();
   }
+  const unavailableBridge = [...writes.keys()]
+    .filter((path) => path.includes('/bridge-project-'))
+    .at(-1)!;
+  unavailable.activity = { one: { type: 'idle' } };
+  await broken.refresh();
+  assert.ok(
+    (writes.get(unavailableBridge)?.warnings as string[]).includes(
+      'Session activity unavailable: Invalid session.active response',
+    ),
+    'non-running activity entries are rejected rather than treated as idle',
+  );
   await broken.close();
 
   const scope = fixture();
@@ -241,10 +254,13 @@ test('session observer storage, scope, failure and lifecycle boundaries are isol
     const id = 'shared-' + i,
       path = '/worktree/' + i;
     shared.infos.set(id, { id, location: { directory: path } });
-    locations.set(path, i === 0 ? Error('beads unavailable') : '/shared-beads');
+    locations.set(
+      path,
+      i === 0 ? new MissingBeadsWorkspaceError() : '/shared-beads',
+    );
   }
   shared.activity = Object.fromEntries(
-    [...shared.infos.keys()].map((id) => [id, {}]),
+    [...shared.infos.keys()].map((id) => [id, { type: 'running' }]),
   );
   const sharedObserver = await observeOpenCodeSessions(shared.ctx, {
     ...options,
@@ -253,6 +269,51 @@ test('session observer storage, scope, failure and lifecycle boundaries are isol
   });
   await sharedObserver.refresh();
   await sharedObserver.close();
+
+  const scopeFailure = fixture();
+  const scopedError = await observeOpenCodeSessions(scopeFailure.ctx, {
+    ...options,
+    listIssues: issues,
+    beadsLocation: async () => ({ path: '/shared-beads' }),
+  });
+  await scopedError.refresh();
+  scopeFailure.infos.set('one', {
+    id: 'one',
+    location: { directory: '/unavailable-worktree' },
+    time: { updated: 1 },
+  });
+  locations.set('/unavailable-worktree', Error('bd permission denied'));
+  now += 5000;
+  await scopedError.refresh();
+  assert.ok(
+    [...writes.values()].some(
+      (value) =>
+        value.sessionID === 'one' &&
+        Array.isArray(value.warnings) &&
+        value.warnings.includes(
+          'Session read unavailable: bd permission denied',
+        ),
+    ),
+    'unexpected Beads lookup errors remain visible on the affected session',
+  );
+  await scopedError.close();
+
+  const missingSnapshot = fixture();
+  missingSnapshot.contextError = true;
+  const recordsBefore = [...writes.values()].filter(
+    (value) => value.sessionID === 'one',
+  ).length;
+  const noSnapshot = await observeOpenCodeSessions(missingSnapshot.ctx, {
+    ...options,
+    listIssues: issues,
+  });
+  await noSnapshot.refresh();
+  assert.equal(
+    [...writes.values()].filter((value) => value.sessionID === 'one').length,
+    recordsBefore,
+    'an active session without a first context snapshot is not persisted as a read failure',
+  );
+  await noSnapshot.close();
 
   const reconnect = fixture();
   let subscriptions = 0;

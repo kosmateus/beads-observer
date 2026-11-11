@@ -18,7 +18,7 @@ interface APIOptions {
   argv?: string[];
 }
 
-// V2.1.3 exposes active/diff over HTTP, but omits them from the plugin Context.
+// OpenCode 2.2.5 exposes active/diff over HTTP, but omits them from plugin Context.
 // Never discover/start another service: activity belongs to this exact process.
 export function openCodeAPI({
   pid = process.pid,

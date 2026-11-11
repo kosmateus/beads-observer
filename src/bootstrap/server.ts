@@ -1,12 +1,23 @@
 import { BeadsWriter } from '../adapters/beads-writer.js';
-import { resolve, basename } from 'node:path';
+import { resolve, basename, join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { Observer } from '../application/observer.js';
 import { Projects } from '../application/projects.js';
-import { BeadsSource } from '../adapters/beads-cli.js';
+import {
+  BeadsSource,
+  MissingBeadsWorkspaceError,
+  projectEnvironment,
+} from '../adapters/beads-cli.js';
 import { DemoSource } from '../adapters/demo.js';
 import { listenHttp } from '../adapters/http.js';
+import { hubDirectory } from '../adapters/hub-files.js';
+import {
+  readProjectPreferences,
+  writeProjectPreferences,
+} from '../adapters/project-preferences.js';
 import type {
   ProjectOptions,
   CanonicalProject,
@@ -16,17 +27,39 @@ import type {
 } from '../types.js';
 
 export const HUB_PROTOCOL = 1;
+const exec = promisify(execFile);
 export function projectID(cwd: string) {
   return createHash('sha256').update(cwd).digest('hex').slice(0, 24);
+}
+export async function gitCommonDirectory(cwd: string) {
+  try {
+    const { stdout } = await exec('git', ['rev-parse', '--git-common-dir'], {
+      cwd,
+      timeout: 3000,
+      env: projectEnvironment(process.env),
+      windowsHide: true,
+    });
+    return await realpath(resolve(cwd, stdout.trim()));
+  } catch {
+    return null;
+  }
+}
+export function canonicalProjectID(
+  cwd: string,
+  gitCommonDir: string | null,
+  beadsLocation: string | null,
+) {
+  return projectID(
+    beadsLocation ? JSON.stringify([gitCommonDir, beadsLocation]) : cwd,
+  );
 }
 export async function canonicalProject(
   input: ProjectOptions,
   defaults: ProjectOptions = {},
 ): Promise<CanonicalProject> {
   const config = { ...defaults, ...input };
-  config.cwd = await realpath(resolve(config.cwd || process.cwd()));
-  const id = projectID(config.cwd);
-  config.project = config.project || basename(config.cwd);
+  const requestedCwd = await realpath(resolve(config.cwd || process.cwd()));
+  const commonDir = await gitCommonDirectory(requestedCwd);
   config.pollIntervalMs ??= 2000;
   config.timeoutMs ??= 15000;
   config.bdPath ??= 'bd';
@@ -36,6 +69,53 @@ export async function canonicalProject(
     throw new Error('timeoutMs must be >= 1000');
   if (typeof config.bdPath !== 'string' || !config.bdPath)
     throw new Error('Invalid bdPath');
+  let beadsLocation: string | null = null,
+    beadsWorkspace: CanonicalProject['beadsWorkspace'] =
+      config.source || config.demo ? 'custom' : 'unavailable';
+  if (beadsWorkspace !== 'custom') {
+    try {
+      beadsLocation = (
+        await new BeadsSource({
+          cwd: requestedCwd,
+          bdPath: config.bdPath,
+          timeoutMs: config.timeoutMs,
+        }).location()
+      ).path;
+      beadsWorkspace = 'available';
+    } catch (error) {
+      if (error instanceof MissingBeadsWorkspaceError)
+        beadsWorkspace = 'missing';
+    }
+  }
+  let cwd = requestedCwd;
+  const databaseRoot =
+    beadsLocation && basename(beadsLocation) === '.beads'
+      ? resolve(beadsLocation, '..')
+      : null;
+  if (beadsWorkspace === 'available') {
+    const commonRoot =
+      commonDir && basename(commonDir) === '.git'
+        ? resolve(commonDir, '..')
+        : null;
+    const candidate = commonRoot || databaseRoot;
+    if (candidate && candidate !== requestedCwd) {
+      try {
+        const candidateLocation = await new BeadsSource({
+          cwd: candidate,
+          bdPath: config.bdPath,
+          timeoutMs: config.timeoutMs,
+        }).location();
+        if (candidateLocation.path === beadsLocation) cwd = candidate;
+      } catch {}
+    }
+  }
+  config.cwd = cwd;
+  const id = canonicalProjectID(
+    beadsWorkspace === 'available' ? cwd : requestedCwd,
+    beadsWorkspace === 'available' ? commonDir : null,
+    beadsLocation,
+  );
+  config.project = config.project || basename(cwd);
   return {
     ...config,
     id,
@@ -44,12 +124,13 @@ export async function canonicalProject(
     bdPath: config.bdPath,
     pollIntervalMs: config.pollIntervalMs,
     timeoutMs: config.timeoutMs,
+    canonicalRoot: commonDir || databaseRoot || cwd,
+    beadsLocation,
+    beadsWorkspace,
   };
 }
 export function configurationSignature(config: ProjectOptions) {
   return JSON.stringify([
-    config.cwd,
-    config.project,
     config.bdPath,
     config.pollIntervalMs,
     config.timeoutMs,
@@ -60,7 +141,16 @@ export async function startServer(options: ServerOptions = {}) {
   const port = options.port ?? 4317;
   if (!Number.isInteger(port) || port < 0 || port > 65535)
     throw new Error('Invalid port');
-  const projects = new Projects(),
+  const preferenceDirectory =
+      options.sessionDirectory ||
+      (port ? await hubDirectory(port, options.runtimeDirectory) : undefined),
+    preferencePath = preferenceDirectory
+      ? join(preferenceDirectory, 'project-preferences.json')
+      : undefined,
+    preferences = await readProjectPreferences(preferencePath),
+    projects = new Projects(preferences, (next) =>
+      writeProjectPreferences(preferencePath, next),
+    ),
     running = new Map<
       string,
       {
@@ -78,6 +168,9 @@ export async function startServer(options: ServerOptions = {}) {
   });
   async function register(input: ProjectOptions, { replace = false } = {}) {
     const config = await canonicalProject(input, options);
+    if (config.beadsWorkspace === 'missing') return config.id;
+    if (config.beadsWorkspace === 'unavailable')
+      throw new Error('Could not verify Beads workspace');
     const signature = configurationSignature(config);
     if (running.has(config.id)) {
       if (running.get(config.id)!.signature === signature) {
@@ -104,6 +197,7 @@ export async function startServer(options: ServerOptions = {}) {
     projects.add({
       id: config.id,
       cwd: config.cwd,
+      canonicalRoot: config.canonicalRoot,
       name: config.project,
       hostVersions: config.hostVersions || [],
       writer:

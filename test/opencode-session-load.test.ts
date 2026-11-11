@@ -17,7 +17,7 @@ test('token storms keep seven sessions current without repeating heavy reads; mu
     location = directory;
   t.mock.method(Date, 'now', () => now);
   const ids = Array.from({ length: 7 }, (_, i) => 'session' + i);
-  let active = Object.fromEntries(ids.map((id) => [id, {}]));
+  let active = Object.fromEntries(ids.map((id) => [id, { type: 'running' }]));
   let contexts = 0,
     diffs = 0,
     concurrent = 0,
@@ -230,7 +230,7 @@ test('token storms keep seven sessions current without repeating heavy reads; mu
       afterTransient + 8,
       'idle transition captures the final diff',
     );
-    active = { [ids[0]]: {} };
+    active = { [ids[0]]: { type: 'running' } };
     parts.set(ids[0], [
       {
         type: 'tool',

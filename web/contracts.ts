@@ -96,6 +96,9 @@ export interface Snapshot {
 export interface Project {
   id: string;
   name: string;
+  defaultName?: string;
+  alias?: string | null;
+  hidden?: boolean;
   cwd: string;
   hostVersions?: string[];
 }
@@ -112,6 +115,14 @@ export interface SessionBlock {
   id: string;
   kind: string;
   text: string;
+  author?:
+    | 'human'
+    | 'coordinator'
+    | 'agent'
+    | 'delegation'
+    | 'system'
+    | 'synthetic'
+    | 'unknown';
   name?: string;
   status?: string;
   command?: string;

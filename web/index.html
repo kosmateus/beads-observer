@@ -26,6 +26,15 @@
         >
         <div class="project-picker">
           <select id="project-select" data-i18n-aria="workspace"></select>
+          <button
+            id="manage-projects"
+            type="button"
+            data-i18n="manageProjects"
+            aria-label="Manage projects"
+            data-i18n-aria="manageProjects"
+          >
+            Manage projects
+          </button>
           <span id="project" hidden></span
           ><small id="project-path" hidden></small
           ><small id="database-path" hidden></small>
@@ -84,6 +93,30 @@
           Reset Beads
         </button>
       </header>
+      <dialog
+        id="project-manager-dialog"
+        aria-labelledby="project-manager-heading"
+      >
+        <div class="detail-top">
+          <h2 id="project-manager-heading" data-i18n="projectManagerTitle">
+            Project list
+          </h2>
+          <button
+            type="button"
+            id="close-project-manager"
+            aria-label="Close"
+            data-i18n-aria="close"
+          >
+            ✕
+          </button>
+        </div>
+        <p class="project-manager-help" data-i18n="projectPreferenceHelp">
+          These controls change only the Observer list; they never rename or
+          delete project files or Beads data.
+        </p>
+        <p id="project-manager-error" role="alert" hidden></p>
+        <div id="project-manager-list"></div>
+      </dialog>
       <main>
         <section id="agent-page" hidden aria-live="polite"></section>
         <section id="detail" hidden aria-live="polite">

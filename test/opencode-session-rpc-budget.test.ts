@@ -38,7 +38,9 @@ test('token storms bound get/context/diff for seven active sessions, 260 histori
     storage: memoryStorage(),
     session: {
       active: async () =>
-        Object.fromEntries([...active, 'foreign'].map((id) => [id, {}])),
+        Object.fromEntries(
+          [...active, 'foreign'].map((id) => [id, { type: 'running' }]),
+        ),
       list: async () => history.map((id) => ({ id })),
       get: async ({ sessionID }) => {
         counts.get++;

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   directSessionLink,
+  metadataSessionLinks,
   resolveSessionLinks,
 } from '../src/domain/session-links.js';
 import { readSessionRecords } from '../src/adapters/session-records.js';
@@ -66,6 +67,57 @@ test('manual assignment wins, and remembered direct evidence survives compaction
       remembered,
     ).get('s')?.issueId,
     'task-b',
+  );
+});
+
+test('exact Beads metadata links sessions without inheriting a parent task', () => {
+  const metadata = metadataSessionLinks([
+    { id: 'task-a', metadata: { sessionID: 'parent-session' } },
+    { id: 'task-b', metadata: '{"sessionID":"child-session"}' },
+  ]);
+  const sessions = new Map([
+    [
+      'parent-session',
+      {
+        metadata: { sessionID: 'parent-session' },
+        messages: [],
+      },
+    ],
+    [
+      'child-session',
+      {
+        info: { parentID: 'parent-session' },
+        metadata: { sessionID: 'child-session' },
+        messages: [],
+      },
+    ],
+    [
+      'unlinked-child',
+      {
+        info: { parentID: 'parent-session' },
+        messages: [],
+      },
+    ],
+  ]);
+  const links = resolveSessionLinks(
+    sessions,
+    known,
+    new Map(),
+    new Map(),
+    metadata,
+  );
+  assert.equal(links.get('parent-session')?.issueId, 'task-a');
+  assert.equal(links.get('child-session')?.issueId, 'task-b');
+  assert.equal(links.get('unlinked-child'), null);
+  assert.deepEqual(
+    resolveSessionLinks(
+      new Map([['ambiguous', { messages: [] }]]),
+      known,
+      new Map(),
+      new Map(),
+      new Map([['ambiguous', ['task-a', 'task-b']]]),
+    ).get('ambiguous'),
+    { ambiguous: true, source: 'metadata' },
   );
 });
 
