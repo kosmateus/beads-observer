@@ -99,10 +99,12 @@ test('V2 envelopes without active/diff context methods; independent child, chang
     active = {};
     infos.child.outcome = 'interrupted';
     infos.child.time.updated++;
+    now += 5000;
     await observer.refresh();
     records = await readSessionRecords(directory, 'project');
     assert.equal(records[0].status, 'interrupted');
     fail = true;
+    now += 5000;
     await observer.refresh();
     records = await readSessionRecords(directory, 'project');
     assert.equal(records[0].status, 'interrupted');
@@ -124,7 +126,8 @@ test('V2 envelopes without active/diff context methods; independent child, chang
 test('running survives transient activity failure only within its grace period and recovers', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'observer-activity-grace-'));
   let now = 1_000_000,
-    fail = false;
+    fail = false,
+    invalid = false;
   const info = {
     id: 'child',
     parentID: 'parent',
@@ -160,6 +163,7 @@ test('running survives transient activity failure only within its grace period a
     api: {
       active: async () => {
         if (fail) throw Error('temporary read failure');
+        if (invalid) return { data: { child: { type: 'idle' } } };
         return { data: { child: { type: 'running' } } };
       },
       diff: async () => ({ data: [] }),
@@ -180,6 +184,16 @@ test('running survives transient activity failure only within its grace period a
       'running',
     );
     assert.equal(await activityAvailable(), true);
+    invalid = true;
+    now += 5000;
+    await observer.refresh();
+    assert.equal(
+      (await readSessionRecords(directory, 'project', undefined, now))[0]
+        .status,
+      'running',
+      'malformed activity retains the last valid active state during its grace period',
+    );
+    invalid = false;
     fail = true;
     now += 5000;
     await observer.refresh();

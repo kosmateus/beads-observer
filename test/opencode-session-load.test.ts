@@ -224,6 +224,7 @@ test('token storms keep seven sessions current without repeating heavy reads; mu
       'transient failures eventually recover',
     );
     active = {};
+    await emit('session.text.ended');
     await observer.refresh();
     assert.equal(
       diffs,
@@ -231,6 +232,7 @@ test('token storms keep seven sessions current without repeating heavy reads; mu
       'idle transition captures the final diff',
     );
     active = { [ids[0]]: { type: 'running' } };
+    await emit('session.execution.started');
     parts.set(ids[0], [
       {
         type: 'tool',

@@ -117,6 +117,10 @@ export async function observeOpenCodeSessions(
       }
     >(),
     scopeCache = new Map<string, { value: boolean; at: number }>();
+  let activitySnapshot: Activity | null = null,
+    activityError = 'Activity has not been read',
+    activityAt: number | null = null,
+    activityRevision = 0;
   let persisted = '',
     catalogCursor: string | undefined;
   // Metadata/activity remain cheap and parallel; never overlap full snapshots.
@@ -230,24 +234,29 @@ export async function observeOpenCodeSessions(
     if (closed || pending) return pending;
     pending = (async () => {
       const warnings: string[] = [];
-      let active: Activity | null = null;
-      try {
-        active = activeSessions(
-          data(
-            await (ctx.session.active
-              ? ctx.session.active()
-              : api.active({ signal: controller.signal })),
-          ),
-        );
-        lastActive = active;
-        lastActiveAt = clock();
-      } catch (error) {
-        active =
-          lastActive && clock() - lastActiveAt < 15000 ? lastActive : null;
-        warnings.push(
-          'Session activity unavailable: ' + (error as Error).message,
-        );
+      if (activityAt === null || clock() - activityAt >= 5000) {
+        const revision = activityRevision;
+        try {
+          activitySnapshot = activeSessions(
+            data(
+              await (ctx.session.active
+                ? ctx.session.active()
+                : api.active({ signal: controller.signal })),
+            ),
+          );
+          lastActive = activitySnapshot;
+          lastActiveAt = clock();
+          activityError = '';
+        } catch (error) {
+          activitySnapshot =
+            lastActive && clock() - lastActiveAt < 15000 ? lastActive : null;
+          activityError = (error as Error).message;
+        }
+        activityAt = revision === activityRevision ? clock() : null;
       }
+      const active = activitySnapshot;
+      if (active === null)
+        warnings.push('Session activity unavailable: ' + activityError);
       if (clock() - issueAt > 30000) {
         try {
           const issues = await listIssues();
@@ -655,6 +664,17 @@ export async function observeOpenCodeSessions(
           if (closed) break;
           const event = typeof raw === 'string' ? JSON.parse(raw) : raw;
           if (event.data?.sessionID) {
+            if (
+              /^session\.(created|moved|deleted|text\.ended|execution\.(started|succeeded|failed|interrupted))$/.test(
+                event.type || '',
+              ) ||
+              (event.type === 'session.text.delta' &&
+                activitySnapshot !== null &&
+                !activitySnapshot[event.data.sessionID])
+            ) {
+              activityRevision++;
+              activityAt = null;
+            }
             const known = metadataCache.get(event.data.sessionID);
             const moved = /^session\.(created|moved)$/.test(event.type || '');
             if (known && !known.belongs && clock() - known.at < 30000 && !moved)
