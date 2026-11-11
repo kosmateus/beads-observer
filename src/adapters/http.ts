@@ -92,6 +92,7 @@ const assets = new Map<string, string[]>([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ...[
     'app',
+    'dom',
     'routes',
     'sessions',
     'reset',
