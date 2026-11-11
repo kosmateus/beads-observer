@@ -9,10 +9,10 @@ export async function readSessionRecords(
   directory: string | undefined,
   projectId: string,
   issueId?: string | null,
+  now = Date.now(),
 ) {
   if (!directory) return [];
-  const latest = new Map<string, SessionRecord>(),
-    now = Date.now();
+  const latest = new Map<string, SessionRecord>();
   let files;
   try {
     files = await readdir(directory);

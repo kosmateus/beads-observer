@@ -60,6 +60,17 @@ export async function runDaemon({
         for (const input of lease.projects) {
           try {
             const config = await canonicalProject(input);
+            if (config.beadsWorkspace === 'missing') continue;
+            if (config.beadsWorkspace === 'unavailable') {
+              const existing = app.projects.findByCanonicalRoot(
+                config.canonicalRoot,
+              );
+              for (const id of existing) {
+                wanted.add(id);
+                outcomes.get(lease.file)!.projectIds.push(id);
+              }
+              continue;
+            }
             const entries = groups.get(config.id) || [];
             entries.push({
               config,
@@ -68,6 +79,7 @@ export async function runDaemon({
             });
             groups.set(config.id, entries);
           } catch (error) {
+            if (errorInfo(error).code === 'ENOENT') continue;
             outcomes.get(lease.file)!.errors.push(errorInfo(error).message);
           }
         }

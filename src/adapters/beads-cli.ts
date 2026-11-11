@@ -6,6 +6,26 @@ import { array, normalize } from '../domain/model.js';
 import type { Issue, Location, StatusEvent } from '../types.js';
 import { errorInfo } from '../types.js';
 const exec = promisify(execFile);
+export class MissingBeadsWorkspaceError extends Error {
+  readonly code = 'BEADS_NO_WORKSPACE';
+  constructor() {
+    super('Beads workspace does not exist');
+    this.name = 'MissingBeadsWorkspaceError';
+  }
+}
+
+export function isMissingBeadsWorkspaceError(error: unknown) {
+  if (error instanceof MissingBeadsWorkspaceError) return true;
+  if (!(error instanceof Error)) return false;
+  const stdout = (error as Error & { stdout?: unknown }).stdout;
+  if (typeof stdout !== 'string') return false;
+  try {
+    return JSON.parse(stdout).error === 'no_beads_directory';
+  } catch {
+    return false;
+  }
+}
+
 export class BeadsSource {
   #activeReads = 0;
   #readQueue: (() => void)[] = [];
@@ -40,17 +60,20 @@ export class BeadsSource {
     this.timeoutMs = timeoutMs;
   }
   async execute<T = Record<string, unknown>>(args: string[]): Promise<T> {
-    const { stdout } = await exec(
-      this.bdPath,
-      ['--readonly', '--json', ...args],
-      {
+    let stdout: string;
+    try {
+      ({ stdout } = await exec(this.bdPath, ['--readonly', '--json', ...args], {
         cwd: this.cwd,
         timeout: this.timeoutMs,
         maxBuffer: 32 * 1024 * 1024,
         env: projectEnvironment(process.env),
         windowsHide: true,
-      },
-    );
+      }));
+    } catch (error) {
+      if (isMissingBeadsWorkspaceError(error))
+        throw new MissingBeadsWorkspaceError();
+      throw error;
+    }
     try {
       return JSON.parse(stdout);
     } catch {
@@ -59,8 +82,15 @@ export class BeadsSource {
   }
   async location() {
     const location = await this.run<Location>(['where']);
-    if (!location.path) throw new Error('Beads did not identify its workspace');
-    const actual = await realpath(location.path);
+    if (!location.path) throw new MissingBeadsWorkspaceError();
+    let actual: string;
+    try {
+      actual = await realpath(location.path);
+    } catch (error) {
+      if (errorInfo(error).code === 'ENOENT')
+        throw new MissingBeadsWorkspaceError();
+      throw error;
+    }
     if (this.pinnedLocation && this.pinnedLocation !== actual)
       throw new Error(
         `Beads location changed: ${this.pinnedLocation} -> ${actual}. Re-register this project.`,

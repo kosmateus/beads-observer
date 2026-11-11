@@ -96,6 +96,9 @@ export interface Snapshot {
 export interface Project {
   id: string;
   name: string;
+  defaultName?: string;
+  alias?: string | null;
+  hidden?: boolean;
   cwd: string;
   hostVersions?: string[];
 }

@@ -5,6 +5,7 @@ import { UpdateIssue } from '../application/update-issue.js';
 import { AddRelation } from '../application/add-relation.js';
 import { randomBytes } from 'node:crypto';
 import { CreateIssue } from '../application/create-issue.js';
+import { projectPreferencePatch } from './project-preferences.js';
 import { createServer } from 'node:http';
 import { readFile, readdir, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -173,7 +174,7 @@ export async function listenHttp(
       const url = new URL(req.url || '/', 'http://localhost');
       if (
         req.method === 'POST' &&
-        /^\/api\/projects\/[^/]+\/(issues|relations|updates|reset-preview|reset)$/.test(
+        /^\/api\/projects\/[^/]+\/(issues|relations|updates|reset-preview|reset|preferences)$/.test(
           url.pathname,
         )
       ) {
@@ -186,11 +187,12 @@ export async function listenHttp(
           res.end('Forbidden');
           return;
         }
+        const isPreference = url.pathname.endsWith('/preferences');
         let raw = '',
           size = 0;
         for await (const chunk of req) {
           size += chunk.length;
-          if (size > 100000)
+          if (size > (isPreference ? 4096 : 100000))
             throw Object.assign(new Error('Request too large'), {
               status: 413,
             });
@@ -201,6 +203,24 @@ export async function listenHttp(
           draft = JSON.parse(raw);
         } catch {
           throw Object.assign(new Error('Invalid JSON'), { status: 400 });
+        }
+        if (isPreference) {
+          let patch: ReturnType<typeof projectPreferencePatch>;
+          try {
+            patch = projectPreferencePatch(draft);
+          } catch (error) {
+            throw Object.assign(
+              error instanceof Error ? error : new Error('Invalid preference'),
+              { status: 400 },
+            );
+          }
+          const preference = await projects.setPreference(
+            decodeURIComponent(url.pathname.split('/')[3]),
+            patch,
+          );
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(preference));
+          return;
         }
         if (
           url.pathname.endsWith('/reset-preview') ||
@@ -335,6 +355,8 @@ export async function listenHttp(
         });
       else if (url.pathname === '/api/projects')
         body = JSON.stringify(projects.list());
+      else if (url.pathname === '/api/projects/preferences')
+        body = JSON.stringify(projects.list(true));
       else if (
         (match && action === 'snapshot') ||
         url.pathname === '/api/snapshot'

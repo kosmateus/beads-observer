@@ -110,6 +110,9 @@ export interface ProjectEntry {
   id: string;
   name: string;
   cwd: string;
+  canonicalRoot?: string;
+  alias?: string | null;
+  hidden?: boolean;
   observer: Observer;
   hostVersions?: string[];
   writer?: Writer | null;
@@ -133,6 +136,9 @@ export interface CanonicalProject extends ProjectOptions {
   bdPath: string;
   pollIntervalMs: number;
   timeoutMs: number;
+  canonicalRoot: string;
+  beadsLocation: string | null;
+  beadsWorkspace: 'available' | 'missing' | 'unavailable' | 'custom';
 }
 export interface ServerOptions extends ProjectOptions {
   port?: number;
@@ -169,11 +175,22 @@ export interface SessionPart {
 }
 export interface SessionInfo {
   id: string;
+  parentID?: string;
+  projectID?: string;
   title?: string;
   agent?: string;
   location?: { directory?: string };
   outcome?: string;
-  time?: unknown;
+  metadata?: Record<string, unknown>;
+  time?: {
+    created?: number;
+    updated?: number;
+    busy?: number;
+    idle?: number;
+    viewed?: number;
+    archived?: number;
+    [key: string]: unknown;
+  };
 }
 export interface SessionDiff {
   file?: string;

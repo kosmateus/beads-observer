@@ -3,9 +3,12 @@ import { join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { atomicJSON } from './hub-files.js';
 import { sessionView } from '../domain/session-view.js';
-import { resolveSessionLinks } from '../domain/session-links.js';
+import {
+  metadataSessionLinks,
+  resolveSessionLinks,
+} from '../domain/session-links.js';
 import { openCodeAPI } from './opencode-api.js';
-import { BeadsSource } from './beads-cli.js';
+import { BeadsSource, MissingBeadsWorkspaceError } from './beads-cli.js';
 import type {
   SessionDiff,
   SessionLink,
@@ -21,10 +24,29 @@ import type {
   SessionBridge,
 } from './opencode-types.js';
 
+class MissingSessionLocationError extends Error {}
+
 const data = <T>(value: ResponseData<T>): T =>
   value && Object.hasOwn(value, 'data')
     ? (value as { data: T }).data
     : (value as T);
+function activeSessions(value: unknown): Activity {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw Error('Invalid session.active response');
+  const result: Activity = {};
+  for (const [sessionID, status] of Object.entries(value)) {
+    if (
+      !sessionID ||
+      !status ||
+      typeof status !== 'object' ||
+      Array.isArray(status) ||
+      (status as { type?: unknown }).type !== 'running'
+    )
+      throw Error('Invalid session.active response');
+    result[sessionID] = { type: 'running' };
+  }
+  return result;
+}
 async function parallel<T>(items: T[], work: (item: T) => Promise<void>) {
   let cursor = 0;
   await Promise.all(
@@ -43,13 +65,15 @@ export async function observeOpenCodeSessions(
     listIssues = async () => [],
     beadsLocation,
     api = openCodeAPI(),
+    clock = Date.now,
   }: {
     directory: string;
     projectId: string;
     cwd: string;
-    listIssues?: () => Promise<(string | { id: string })[]>;
+    listIssues?: () => Promise<(string | { id: string; metadata?: unknown })[]>;
     beadsLocation?: () => Promise<{ path: string }>;
     api?: OpenCodeAPI;
+    clock?: () => number;
   },
 ): Promise<SessionBridge> {
   const host = randomUUID(),
@@ -73,10 +97,13 @@ export async function observeOpenCodeSessions(
     pending: Promise<void> | null = null,
     timer: ReturnType<typeof setTimeout> | null = null,
     known = new Set<string>(),
+    issueMetadataLinks = new Map<string, string[]>(),
     catalogAt = 0,
     issueAt = 0,
     recent: string[] = [],
     previousActive: string[] = [],
+    lastActive: Activity | null = null,
+    lastActiveAt = 0,
     idleCursor = 0;
   const filename = (id: string) =>
     join(
@@ -90,10 +117,17 @@ export async function observeOpenCodeSessions(
   const bridgeFile = join(directory, `bridge-${projectId}-${host}.json`);
   async function belongs(info: ObserverSessionInfo) {
     if (!info.location?.directory) return false;
-    const path = await realpath(info.location.directory);
+    let path: string;
+    try {
+      path = await realpath(info.location.directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+        throw new MissingSessionLocationError();
+      throw error;
+    }
     if (path === canonical) return true;
     const cached = scopeCache.get(path);
-    if (cached && Date.now() - cached.at < 30000) return cached.value;
+    if (cached && clock() - cached.at < 30000) return cached.value;
     let value = false;
     if (beadsLocation)
       try {
@@ -102,8 +136,10 @@ export async function observeOpenCodeSessions(
           new BeadsSource({ cwd: path }).location(),
         ]);
         value = own.path === other.path;
-      } catch {}
-    scopeCache.set(path, { value, at: Date.now() });
+      } catch (error) {
+        if (!(error instanceof MissingBeadsWorkspaceError)) throw error;
+      }
+    scopeCache.set(path, { value, at: clock() });
     if (scopeCache.size > 600)
       scopeCache.delete(scopeCache.keys().next().value!);
     return value;
@@ -158,35 +194,42 @@ export async function observeOpenCodeSessions(
       const warnings: string[] = [];
       let active: Activity | null = null;
       try {
-        active = data(
-          await (ctx.session.active
-            ? ctx.session.active()
-            : api.active({ signal: controller.signal })),
+        active = activeSessions(
+          data(
+            await (ctx.session.active
+              ? ctx.session.active()
+              : api.active({ signal: controller.signal })),
+          ),
         );
-        if (!active || typeof active !== 'object' || Array.isArray(active))
-          throw Error('Invalid session.active response');
+        lastActive = active;
+        lastActiveAt = clock();
       } catch (error) {
-        active = null;
+        active =
+          lastActive && clock() - lastActiveAt < 15000 ? lastActive : null;
         warnings.push(
           'Session activity unavailable: ' + (error as Error).message,
         );
       }
-      if (Date.now() - issueAt > 30000) {
+      if (clock() - issueAt > 30000) {
         try {
+          const issues = await listIssues();
           known = new Set(
-            (await listIssues()).map((x) => (typeof x === 'string' ? x : x.id)),
+            issues.map((x) => (typeof x === 'string' ? x : x.id)),
           );
-          issueAt = Date.now();
+          issueMetadataLinks = metadataSessionLinks(
+            issues.filter(
+              (x): x is { id: string; metadata?: unknown } =>
+                typeof x !== 'string',
+            ),
+          );
+          issueAt = clock();
         } catch {
           warnings.push(
             'Beads issue catalog unavailable; automatic links may be incomplete',
           );
         }
       }
-      if (
-        ctx.session.list &&
-        (Date.now() - catalogAt > 30000 || catalogCursor)
-      ) {
+      if (ctx.session.list && (clock() - catalogAt > 30000 || catalogCursor)) {
         try {
           const filter = ctx.location?.project?.id
             ? { project: ctx.location.project.id }
@@ -199,7 +242,7 @@ export async function observeOpenCodeSessions(
           const ids = data(result).map((x) => x.id);
           catalogCursor = result.cursor?.next;
           recent = [...new Set([...recent, ...ids])];
-          catalogAt = Date.now();
+          catalogAt = clock();
         } catch (error) {
           catalogCursor = undefined;
           warnings.push(
@@ -211,7 +254,9 @@ export async function observeOpenCodeSessions(
           string,
           { info: ObserverSessionInfo; messages: SessionMessage[] }
         >(),
-        failed = new Set<string>();
+        failed = new Set<string>(),
+        staleLocations = new Set<string>(),
+        sessionWarnings = new Map<string, string[]>();
       async function load(sessionID: string) {
         if (closed || sessions.has(sessionID) || failed.has(sessionID)) return;
         try {
@@ -239,11 +284,15 @@ export async function observeOpenCodeSessions(
           if (contextCache.size > 128)
             contextCache.delete(contextCache.keys().next().value!);
           sessions.set(sessionID, { info, messages });
+          sessionWarnings.delete(sessionID);
         } catch (error) {
           failed.add(sessionID);
-          warnings.push(
-            'Session ' + sessionID + ': ' + (error as Error).message,
-          );
+          if (error instanceof MissingSessionLocationError)
+            staleLocations.add(sessionID);
+          else
+            sessionWarnings.set(sessionID, [
+              'Session read unavailable: ' + (error as Error).message,
+            ]);
         }
       }
       // Active sessions and event IDs bypass the bounded historical queue.
@@ -266,8 +315,20 @@ export async function observeOpenCodeSessions(
         ],
         load,
       );
-      if (active !== null) previousActive = Object.keys(active);
-      const links = resolveSessionLinks(sessions, known, manual, remembered);
+      previousActive = active === null ? [] : Object.keys(active);
+      const linkSessions = new Map(
+        [...sessions].map(([id, session]) => [
+          id,
+          { messages: session.messages, metadata: session.info.metadata },
+        ]),
+      );
+      const links = resolveSessionLinks(
+        linkSessions,
+        known,
+        manual,
+        remembered,
+        issueMetadataLinks,
+      );
       await parallel([...sessions], async ([sessionID, { info, messages }]) => {
         if (closed) return;
         const link = links.get(sessionID);
@@ -284,8 +345,7 @@ export async function observeOpenCodeSessions(
         if (link?.issueId && !manual.has(sessionID))
           remembered.set(sessionID, link);
         else if (link?.ambiguous) remembered.delete(sessionID);
-        const localWarnings = [...warnings];
-        if (active === null) localWarnings.push('Session activity unavailable');
+        const localWarnings = [...(sessionWarnings.get(sessionID) || [])];
         if (link?.ambiguous)
           localWarnings.push(
             'Several Beads IDs found; no current task selected automatically',
@@ -328,9 +388,9 @@ export async function observeOpenCodeSessions(
           linkSource: link?.source || null,
           parentSessionID: info.parentID || null,
           connected: true,
-          updatedAt: Date.now(),
+          updatedAt: clock(),
         };
-        if (active === null) record.status = 'unknown';
+        if (active === null && !info.outcome) record.status = 'unknown';
         records.set(sessionID, record);
         await atomicJSON(filename(sessionID), record);
       });
@@ -343,9 +403,15 @@ export async function observeOpenCodeSessions(
         if (old) {
           const stale = {
             ...old,
-            status: 'unknown',
+            status:
+              staleLocations.has(id) &&
+              typeof old.status === 'string' &&
+              ['succeeded', 'failed', 'interrupted'].includes(old.status)
+                ? old.status
+                : 'unknown',
             connected: false,
-            updatedAt: Date.now(),
+            updatedAt: old.updatedAt,
+            warnings: sessionWarnings.get(id) || [],
           };
           records.set(id, stale);
           await atomicJSON(filename(id), stale);
@@ -355,7 +421,7 @@ export async function observeOpenCodeSessions(
         projectId,
         connected: true,
         activityAvailable: active !== null && issueAt > 0 && catalogAt > 0,
-        updatedAt: Date.now(),
+        updatedAt: clock(),
         warnings,
       });
     })().finally(() => {
@@ -437,13 +503,13 @@ export async function observeOpenCodeSessions(
           ...record,
           connected: false,
           status: 'unknown',
-          updatedAt: Date.now(),
+          updatedAt: clock(),
         });
       await atomicJSON(bridgeFile, {
         projectId,
         connected: false,
         activityAvailable: false,
-        updatedAt: Date.now(),
+        updatedAt: clock(),
         warnings: ['Session observer disconnected'],
       });
     },

@@ -33,11 +33,17 @@ export async function acquireSharedHub(options: ServerOptions = {}) {
   ];
   const configs: ProjectOptions[] = [];
   for (const input of inputs) {
-    const config = await canonicalProject({
-      ...options,
-      ...input,
-      cwd: resolve(base, input.cwd || base),
-    });
+    let config: Awaited<ReturnType<typeof canonicalProject>>;
+    try {
+      config = await canonicalProject({
+        ...options,
+        ...input,
+        cwd: resolve(base, input.cwd || base),
+      });
+    } catch (error) {
+      if (errorInfo(error).code === 'ENOENT') continue;
+      throw error;
+    }
     // Persist only declarative options. No credentials, environment or executable arguments.
     configs.push({
       cwd: config.cwd,

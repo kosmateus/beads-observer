@@ -18,6 +18,8 @@
     "build": "tsx scripts/build.ts",
     "prepack": "npm run build",
     "test": "npm run build && node --test dist/test/*.test.js",
+    "test:browser:scroll": "npm run build && node dist/test/project-refresh-scroll.js",
+    "test:browser:readonly": "npm run build && node dist/test/browser-readonly.js",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

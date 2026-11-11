@@ -232,12 +232,38 @@ export function directSessionLink(
   }
   return null;
 }
+function metadataRecord(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === 'object' && !Array.isArray(value))
+    return value as Record<string, unknown>;
+  if (typeof value === 'string')
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {}
+  return null;
+}
+export function metadataSessionLinks(
+  issues: ReadonlyArray<{ id: string; metadata?: unknown }>,
+) {
+  const result = new Map<string, string[]>();
+  for (const issue of issues) {
+    const sessionID = metadataRecord(issue.metadata)?.sessionID;
+    if (typeof sessionID !== 'string' || !sessionID) continue;
+    const linked = result.get(sessionID) || [];
+    linked.push(issue.id);
+    result.set(sessionID, linked);
+  }
+  return result;
+}
 /** A parent relationship alone says nothing about a child's assigned task. */
 export function resolveSessionLinks(
   sessions: ReadonlyMap<string, { messages: SessionMessage[] } | null>,
   known: ReadonlySet<string>,
   manual: ReadonlyMap<string, string[]>,
   remembered: ReadonlyMap<string, SessionLink> = new Map(),
+  metadataLinks: ReadonlyMap<string, string[]> = new Map(),
 ) {
   const result = new Map<string, SessionLink | null>();
   for (const [id, session] of sessions) {
@@ -245,12 +271,30 @@ export function resolveSessionLinks(
     const explicit = manual.get(id);
     if (explicit?.length) link = { issueId: explicit.at(-1), source: 'manual' };
     else if (session) {
-      const own = directSessionLink(session.messages, known);
-      if (own)
-        link =
-          own.ids.length === 1
-            ? { issueId: own.ids[0], source: own.source }
-            : { ambiguous: true, source: own.source };
+      const sessionMetadata = metadataRecord(
+        (session as { metadata?: unknown }).metadata,
+      );
+      const metadataID = sessionMetadata?.sessionID;
+      const exact = [
+        ...new Set(
+          [
+            ...(metadataLinks.get(id) || []),
+            ...(typeof metadataID === 'string'
+              ? metadataLinks.get(metadataID) || []
+              : []),
+          ].filter((issueId) => known.has(issueId)),
+        ),
+      ];
+      if (exact.length === 1) link = { issueId: exact[0], source: 'metadata' };
+      else if (exact.length > 1) link = { ambiguous: true, source: 'metadata' };
+      else {
+        const own = directSessionLink(session.messages, known);
+        if (own)
+          link =
+            own.ids.length === 1
+              ? { issueId: own.ids[0], source: own.source }
+              : { ambiguous: true, source: own.source };
+      }
     }
     const saved = remembered.get(id);
     if (
