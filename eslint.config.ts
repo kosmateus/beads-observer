@@ -1,8 +1,9 @@
 import js from '@eslint/js';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
+import { defineConfig } from 'eslint/config';
 
-export default [
+export default defineConfig([
   {
     ignores: [
       'node_modules/**',
@@ -51,4 +52,4 @@ export default [
     files: ['test/viewport-scroll.{mjs,ts}'],
     languageOptions: { globals: globals.browser },
   },
-];
+]);

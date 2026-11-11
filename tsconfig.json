@@ -15,6 +15,7 @@
     "sourceMap": false
   },
   "include": [
+    "eslint.config.ts",
     "index.ts",
     "src/**/*.ts",
     "web/**/*.ts",
