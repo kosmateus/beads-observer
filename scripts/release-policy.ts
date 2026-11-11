@@ -37,5 +37,9 @@ export async function analyzeCommits(
     return requested;
   }
 
+  if (detected !== 'patch' && detected !== 'minor' && detected !== 'major') {
+    return detected;
+  }
+
   return releaseRank[requested] >= releaseRank[detected] ? requested : detected;
 }
