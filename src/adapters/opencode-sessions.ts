@@ -57,7 +57,11 @@ export async function observeOpenCodeSessions(
     history = new Map<string, string[]>(),
     records = new Map<
       string,
-      Omit<SessionRecord, 'activeIssueId'> & { activeIssueId: string | null }
+      Omit<SessionRecord, 'activeIssueId'> & {
+        activeIssueId: string | null;
+        diffs?: SessionDiff[];
+        diffFailure?: { scope: string; error: string };
+      }
     >(),
     controller = new AbortController();
   const contextCache = new Map<
@@ -332,7 +336,8 @@ export async function observeOpenCodeSessions(
           localWarnings.push(
             'Several Beads IDs found; no current task selected automatically',
           );
-        let diffs = cached.diffs || [];
+        const old = records.get(sessionID);
+        let diffs = cached.diffs || old?.diffs || [];
         // Ignore text/output deltas and known read-only tools. Unknown tools
         // can write files too (not just patch), so retain their terminal state.
         // A bounded fallback covers writes inside a still-running shell/execute.
@@ -368,6 +373,14 @@ export async function observeOpenCodeSessions(
           cached.location,
           messages.filter((message) => message.type === 'user').at(-1)?.id,
         ]);
+        // The 128-entry message cache is disposable; a rejected range is not.
+        // Keep its tiny marker with the already-retained session record, so
+        // historical rotation cannot turn a permanent error into another RPC.
+        if (old?.diffFailure?.scope === diffScope) {
+          cached.diffScope = diffScope;
+          cached.diffError = old.diffFailure.error;
+          cached.permanent = true;
+        }
         if (cached.diffScope && cached.diffScope !== diffScope) {
           cached.permanent = false;
           cached.diffError = undefined;
@@ -435,6 +448,9 @@ export async function observeOpenCodeSessions(
           activeIssueId: link?.issueId || null,
           linkSource: link?.source || null,
           parentSessionID: info.parentID || null,
+          diffFailure: cached.permanent
+            ? { scope: diffScope, error: cached.diffError! }
+            : undefined,
           connected: true,
           updatedAt: Date.now(),
         };

@@ -38,5 +38,9 @@ scope changes, persistent and transient errors, new user turns, final snapshots,
 storage restoration, scope/cache bounds, subscription recovery and HTTP fallback.
 Fake timers verify actual scheduled five-second cadence after semantic events;
 a blocked in-flight context verifies that closing never starts queued RPCs.
+Historical rotation covers 260 idle sessions plus an active session: permanent
+range failures survive eviction from the 128-entry context cache, while a new
+user turn or location still retries. The small failure marker lives with the
+existing session record, not in another growing cache or a retry-TTL table.
 They never create sessions or inbox messages in a running host. Module mocking
 uses Node's `--experimental-test-module-mocks` test-only flag.
