@@ -1,4 +1,4 @@
-// OpenCode v2.1.3: Session.Message.Info, FileDiff.Info. Do not infer task completion.
+// OpenCode 2.2.5: Session.Message.Info, FileDiff.Info. Do not infer task completion.
 import type { SessionInfo, SessionMessage, SessionDiff } from '../types.js';
 interface Block {
   kind: string;
@@ -20,7 +20,6 @@ interface Block {
   error?: string;
 }
 interface OriginAwareMessage extends SessionMessage {
-  agent?: string;
   metadata?: Record<string, unknown>;
 }
 const clip = (value: unknown, max = 4000) =>
@@ -63,9 +62,8 @@ function authorOf(message: OriginAwareMessage): Block['author'] {
     origin === 'synthetic'
   )
     return origin;
-  return message.type === 'assistant' && typeof message.agent === 'string'
-    ? 'agent'
-    : 'unknown';
+  if (message.type === 'assistant') return 'agent';
+  return 'unknown';
 }
 
 export function sessionView(
