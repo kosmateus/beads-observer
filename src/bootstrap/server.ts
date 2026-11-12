@@ -28,6 +28,55 @@ import type {
 
 export const HUB_PROTOCOL = 1;
 const exec = promisify(execFile);
+const CANONICAL_CACHE_TTL_MS = 1000;
+const CANONICAL_CACHE_LIMIT = 128;
+type ProjectIdentity = {
+  commonDir: string | null;
+  cwd: string;
+  beadsLocation: string | null;
+  beadsWorkspace: CanonicalProject['beadsWorkspace'];
+};
+const canonicalCache = new Map<
+  string,
+  { expiresAt: number; identity: ProjectIdentity }
+>();
+
+function canonicalCacheKey(
+  cwd: string,
+  bdPath: string,
+  timeoutMs: number,
+  custom: boolean,
+) {
+  return JSON.stringify([cwd, bdPath, timeoutMs, custom]);
+}
+
+function rememberProjectIdentity(key: string, identity: ProjectIdentity) {
+  if (identity.beadsWorkspace === 'unavailable') return;
+  canonicalCache.set(key, {
+    expiresAt: Date.now() + CANONICAL_CACHE_TTL_MS,
+    identity,
+  });
+  if (canonicalCache.size > CANONICAL_CACHE_LIMIT)
+    canonicalCache.delete(canonicalCache.keys().next().value as string);
+}
+
+async function cachedProjectIdentity(
+  key: string,
+  discover: () => Promise<ProjectIdentity>,
+) {
+  const cached = canonicalCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    canonicalCache.delete(key);
+    canonicalCache.set(key, cached);
+    return cached.identity;
+  }
+  if (cached) canonicalCache.delete(key);
+
+  const identity = await discover();
+  rememberProjectIdentity(key, identity);
+  return identity;
+}
+
 export function projectID(cwd: string) {
   return createHash('sha256').update(cwd).digest('hex').slice(0, 24);
 }
@@ -59,7 +108,6 @@ export async function canonicalProject(
 ): Promise<CanonicalProject> {
   const config = { ...defaults, ...input };
   const requestedCwd = await realpath(resolve(config.cwd || process.cwd()));
-  const commonDir = await gitCommonDirectory(requestedCwd);
   config.pollIntervalMs ??= 2000;
   config.timeoutMs ??= 15000;
   config.bdPath ??= 'bd';
@@ -69,46 +117,68 @@ export async function canonicalProject(
     throw new Error('timeoutMs must be >= 1000');
   if (typeof config.bdPath !== 'string' || !config.bdPath)
     throw new Error('Invalid bdPath');
-  let beadsLocation: string | null = null,
-    beadsWorkspace: CanonicalProject['beadsWorkspace'] =
-      config.source || config.demo ? 'custom' : 'unavailable';
-  if (beadsWorkspace !== 'custom') {
-    try {
-      beadsLocation = (
-        await new BeadsSource({
-          cwd: requestedCwd,
-          bdPath: config.bdPath,
-          timeoutMs: config.timeoutMs,
-        }).location()
-      ).path;
-      beadsWorkspace = 'available';
-    } catch (error) {
-      if (error instanceof MissingBeadsWorkspaceError)
-        beadsWorkspace = 'missing';
+  const custom = !!(config.source || config.demo);
+  const identityKey = canonicalCacheKey(
+    requestedCwd,
+    config.bdPath,
+    config.timeoutMs,
+    custom,
+  );
+  const identity = await cachedProjectIdentity(identityKey, async () => {
+    const commonDir = await gitCommonDirectory(requestedCwd);
+    let beadsLocation: string | null = null,
+      beadsWorkspace: CanonicalProject['beadsWorkspace'] = custom
+        ? 'custom'
+        : 'unavailable';
+    if (beadsWorkspace !== 'custom') {
+      try {
+        beadsLocation = (
+          await new BeadsSource({
+            cwd: requestedCwd,
+            bdPath: config.bdPath,
+            timeoutMs: config.timeoutMs,
+          }).location()
+        ).path;
+        beadsWorkspace = 'available';
+      } catch (error) {
+        if (error instanceof MissingBeadsWorkspaceError)
+          beadsWorkspace = 'missing';
+      }
     }
-  }
-  let cwd = requestedCwd;
+    let cwd = requestedCwd;
+    const databaseRoot =
+      beadsLocation && basename(beadsLocation) === '.beads'
+        ? resolve(beadsLocation, '..')
+        : null;
+    if (beadsWorkspace === 'available') {
+      const commonRoot =
+        commonDir && basename(commonDir) === '.git'
+          ? resolve(commonDir, '..')
+          : null;
+      const candidate = commonRoot || databaseRoot;
+      if (candidate && candidate !== requestedCwd) {
+        try {
+          const candidateLocation = await new BeadsSource({
+            cwd: candidate,
+            bdPath: config.bdPath,
+            timeoutMs: config.timeoutMs,
+          }).location();
+          if (candidateLocation.path === beadsLocation) cwd = candidate;
+        } catch {}
+      }
+    }
+    return { commonDir, cwd, beadsLocation, beadsWorkspace };
+  });
+  const { commonDir, cwd, beadsLocation, beadsWorkspace } = identity;
+  if (cwd !== requestedCwd)
+    rememberProjectIdentity(
+      canonicalCacheKey(cwd, config.bdPath, config.timeoutMs, custom),
+      identity,
+    );
   const databaseRoot =
     beadsLocation && basename(beadsLocation) === '.beads'
       ? resolve(beadsLocation, '..')
       : null;
-  if (beadsWorkspace === 'available') {
-    const commonRoot =
-      commonDir && basename(commonDir) === '.git'
-        ? resolve(commonDir, '..')
-        : null;
-    const candidate = commonRoot || databaseRoot;
-    if (candidate && candidate !== requestedCwd) {
-      try {
-        const candidateLocation = await new BeadsSource({
-          cwd: candidate,
-          bdPath: config.bdPath,
-          timeoutMs: config.timeoutMs,
-        }).location();
-        if (candidateLocation.path === beadsLocation) cwd = candidate;
-      } catch {}
-    }
-  }
   config.cwd = cwd;
   const id = canonicalProjectID(
     beadsWorkspace === 'available' ? cwd : requestedCwd,
