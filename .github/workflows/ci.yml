@@ -32,7 +32,8 @@ jobs:
       - run: npm run format:check
       - run: npm run typecheck
       - run: npm run build
-      - run: npm test
+      - name: Tests and full changed-runtime coverage
+        run: npm test
       - run: npm run pack:check
       - run: npm pack --dry-run
 

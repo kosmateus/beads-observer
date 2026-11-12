@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -8,6 +8,8 @@ process.chdir(fileURLToPath(new URL('../', import.meta.url)));
 const files = [
   'src/adapters/opencode-api.ts',
   'src/adapters/opencode-sessions.ts',
+  'src/adapters/beads-cli.ts',
+  'src/bootstrap/server.ts',
 ];
 const git = (...args: string[]) =>
   execFileSync('git', args, { encoding: 'utf8' }).trim();
@@ -17,6 +19,7 @@ function run(args: string[]) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 await mkdir('coverage', { recursive: true });
+await copyFile('package.json', 'coverage/package.json');
 run([
   'node_modules/typescript/bin/tsc',
   '-p',
@@ -26,25 +29,36 @@ run([
   '--sourceMap',
   '--inlineSources',
 ]);
+const tests = [
+  'opencode-api.test.js',
+  'opencode-api-coverage.test.js',
+  'opencode-session-load.test.js',
+  'opencode-sessions.test.js',
+  'opencode-session-boundaries.test.js',
+  'opencode-session-cadence.test.js',
+  'opencode-session-eviction.test.js',
+  'opencode-session-rpc-budget.test.js',
+  'beads-cli.test.js',
+  'beads-cli-overhead.test.js',
+  'canonical-project-cache.test.js',
+  'server-bootstrap-coverage.test.js',
+  'project-registry.test.js',
+  'project-preferences.test.js',
+].map((name) => `coverage/build/test/${name}`);
 run([
   '--enable-source-maps',
   '--experimental-test-coverage',
   '--experimental-test-module-mocks',
   '--test-coverage-include=**/src/adapters/opencode-*.*',
+  '--test-coverage-include=**/src/adapters/beads-cli.*',
+  '--test-coverage-include=**/src/bootstrap/server.*',
   '--test-reporter=spec',
   '--test-reporter-destination=stdout',
   '--test-reporter=' +
     resolve('coverage/build/scripts/observation-coverage-reporter.js'),
   '--test-reporter-destination=coverage/observation-node-coverage.json',
   '--test',
-  'coverage/build/test/opencode-api.test.js',
-  'coverage/build/test/opencode-api-coverage.test.js',
-  'coverage/build/test/opencode-session-load.test.js',
-  'coverage/build/test/opencode-sessions.test.js',
-  'coverage/build/test/opencode-session-boundaries.test.js',
-  'coverage/build/test/opencode-session-cadence.test.js',
-  'coverage/build/test/opencode-session-eviction.test.js',
-  'coverage/build/test/opencode-session-rpc-budget.test.js',
+  ...tests,
 ]);
 
 interface Counter {
@@ -94,7 +108,7 @@ const report = {
   node: process.version,
   generatedAt: new Date().toISOString(),
   scope:
-    'Full source-mapped line and branch coverage of both modified runtime adapters, including their pre-existing code. No other repository files are part of this gate.',
+    'Full source-mapped line and branch coverage of the established session-observation adapters and every runtime file changed for the Beads/Git overhead fix. The unchanged hub daemon is not part of this gate. No coverage exclusions are used.',
   results,
 };
 await writeFile(
@@ -106,7 +120,7 @@ const rows = results.map(
     `| ${entry.file} | ${entry.coveredLines}/${entry.totalLines} | ${entry.coveredBranches}/${entry.totalBranches} |`,
 );
 const markdown = [
-  '# Session observation fix coverage',
+  '# Beads Observer runtime coverage',
   '',
   `Head: \`${report.head}\`; dirty runtime/test/tooling files: **${report.dirty}**.`,
   `Node: \`${process.version}\`.`,
@@ -130,6 +144,4 @@ if (
       entry.coveredBranches !== entry.totalBranches,
   )
 )
-  throw Error(
-    'Observation fix requires 100% full-file line and branch coverage',
-  );
+  throw Error('Overhead fix requires 100% full-file line and branch coverage');
