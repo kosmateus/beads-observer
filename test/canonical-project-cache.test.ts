@@ -55,7 +55,9 @@ const args = process.argv.slice(2);
 if (args.includes('--version')) { process.stdout.write('fixture-bd'); process.exit(0); }
 if (args.includes('where')) {
   fs.appendFileSync(${JSON.stringify(whereCount)}, 'where\\n');
-  process.stdout.write(JSON.stringify({ path: ${JSON.stringify(beads)} }));
+  const location = [${JSON.stringify(beads)}, ${JSON.stringify(join(repo, '.beads'))}].find(fs.existsSync);
+  if (!location) { process.stdout.write(JSON.stringify({ error: 'no_beads_directory' })); process.exit(1); }
+  process.stdout.write(JSON.stringify({ path: location }));
   process.exit(0);
 }
 process.stdout.write('[]');
@@ -67,7 +69,15 @@ process.stdout.write('[]');
     await atomicJSON(lease, {
       pid: process.pid,
       updatedAt: Date.now(),
-      projects: [{ cwd, bdPath, pollIntervalMs: 3600000, timeoutMs: 5000 }],
+      projects: [
+        {
+          cwd,
+          bdPath,
+          pollIntervalMs: 3600000,
+          timeoutMs: 5000,
+          opencodeVersion: 'scan-1',
+        },
+      ],
     });
     process.env.PATH = [bin, previousPath].filter(Boolean).join(delimiter);
 
@@ -86,18 +96,64 @@ process.stdout.write('[]');
       }
       assert.fail('Timed out waiting for the first daemon scan');
     };
+    const waitForHostVersion = async (version: string) => {
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline) {
+        if (daemon?.projects.list()[0]?.hostVersions.includes(version)) return;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.fail(`Timed out waiting for daemon scan ${version}`);
+    };
+    const writeLease = async (opencodeVersion: string) =>
+      atomicJSON(lease, {
+        pid: process.pid,
+        updatedAt: Date.now(),
+        projects: [
+          {
+            cwd,
+            bdPath,
+            pollIntervalMs: 3600000,
+            timeoutMs: 5000,
+            opencodeVersion,
+          },
+        ],
+      });
     try {
       daemon = await runDaemon({
         port: 0,
         directory,
-        scanMs: 20,
+        scanMs: 1000,
         idleMs: 3000,
       });
       await waitForResult();
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await waitForHostVersion('scan-1');
+      await writeLease('scan-2');
+      await waitForHostVersion('scan-2');
+      await writeLease('scan-3');
+      await waitForHostVersion('scan-3');
 
       assert.equal(await count(gitCount), 1);
-      assert.ok((await count(whereCount)) <= 4);
+      assert.equal(await count(whereCount), 3);
+
+      await rm(beads, { recursive: true });
+      const missingDeadline = Date.now() + 3000;
+      while (Date.now() < missingDeadline && daemon.projects.list().length)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(daemon.projects.list().length, 0);
+      assert.deepEqual(
+        JSON.parse(await readFile(lease + '.result', 'utf8')).projectIds,
+        [],
+      );
+      assert.equal(await count(gitCount), 2);
+      assert.equal(await count(whereCount), 4);
+
+      const movedBeads = join(repo, '.beads');
+      await mkdir(movedBeads);
+      await writeLease('scan-4');
+      await waitForHostVersion('scan-4');
+      assert.equal(daemon.projects.list()[0].cwd, repo);
+      assert.equal(await count(gitCount), 3);
+      assert.equal(await count(whereCount), 6);
     } finally {
       await daemon?.close();
       process.env.PATH = previousPath;
@@ -123,6 +179,9 @@ test(
       bdPath = join(bin, 'bd'),
       alternateBdPath = join(bin, 'bd-alternate'),
       previousPath = process.env.PATH;
+    const originalDateNow = Date.now;
+    let now = originalDateNow();
+    Date.now = () => now;
     await mkdir(join(cwd, '.git'), { recursive: true });
     await mkdir(beadsA, { recursive: true });
     await mkdir(beadsB, { recursive: true });
@@ -186,11 +245,24 @@ process.stdout.write('[]');
     try {
       const first = await canonicalProject({ cwd, bdPath, timeoutMs: 5000 });
       assert.equal(first.beadsLocation, beadsA);
+      await rm(join(root, 'beads-a'), { recursive: true });
+      await writeFile(join(root, 'beads-a'), 'not a directory');
       await writeFile(location, beadsB);
       assert.equal(
         (await canonicalProject({ cwd, bdPath, timeoutMs: 5000 }))
           .beadsLocation,
-        beadsA,
+        beadsB,
+      );
+      const beforeExpiry = await readFile(whereCount, 'utf8');
+      now += 10_001;
+      assert.equal(
+        (await canonicalProject({ cwd, bdPath, timeoutMs: 5000 }))
+          .beadsLocation,
+        beadsB,
+      );
+      assert.equal(
+        (await readFile(whereCount, 'utf8')).trim().split('\n').length,
+        beforeExpiry.trim().split('\n').length + 1,
       );
       assert.equal(
         (
@@ -214,10 +286,11 @@ process.stdout.write('[]');
           .beadsWorkspace,
         'unavailable',
       );
+      await writeFile(mode, 'ready');
       assert.equal(
         (await canonicalProject({ cwd, bdPath, timeoutMs: 7000 }))
-          .beadsWorkspace,
-        'unavailable',
+          .beadsLocation,
+        beadsB,
       );
 
       await writeFile(mode, 'missing');
@@ -226,31 +299,98 @@ process.stdout.write('[]');
           .beadsWorkspace,
         'missing',
       );
-      const beforeMissingHit = (await readFile(whereCount, 'utf8')).trim();
+      const beforeMissing = (await readFile(whereCount, 'utf8')).trim();
       assert.equal(
         (await canonicalProject({ cwd, bdPath, timeoutMs: 8000 }))
           .beadsWorkspace,
         'missing',
       );
       assert.equal(
-        (await readFile(whereCount, 'utf8')).trim(),
-        beforeMissingHit,
+        (await readFile(whereCount, 'utf8')).trim().split('\n').length,
+        beforeMissing.trim().split('\n').length + 1,
       );
 
-      await new Promise((resolve) => setTimeout(resolve, 1100));
       await writeFile(mode, 'ready');
       assert.equal(
-        (await canonicalProject({ cwd, bdPath, timeoutMs: 5000 }))
+        (await canonicalProject({ cwd, bdPath, timeoutMs: 8000 }))
           .beadsLocation,
         beadsB,
       );
       assert.equal(
         (await readFile(whereCount, 'utf8')).trim().split('\n').length,
-        6,
+        beforeMissing.trim().split('\n').length + 2,
       );
       assert.equal(
         (await readFile(alternateWhereCount, 'utf8')).trim().split('\n').length,
         1,
+      );
+    } finally {
+      Date.now = originalDateNow;
+      process.env.PATH = previousPath;
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'canonical identity cache invalidates when a Git worktree changes its common directory',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), 'observer-canonical-worktree-')),
+      cwd = join(root, 'worktree'),
+      beads = join(cwd, '.beads'),
+      commonA = join(root, 'common-a', '.git'),
+      commonB = join(root, 'common-b', '.git'),
+      bin = join(root, 'bin'),
+      commonDirFile = join(root, 'common-dir'),
+      gitCount = join(root, 'git-count'),
+      whereCount = join(root, 'where-count'),
+      bdPath = join(bin, 'bd'),
+      previousPath = process.env.PATH;
+    await mkdir(beads, { recursive: true });
+    await mkdir(commonA, { recursive: true });
+    await mkdir(commonB, { recursive: true });
+    await mkdir(bin);
+    await writeFile(join(cwd, '.git'), 'gitdir: common-a\n');
+    await writeFile(commonDirFile, commonA);
+    await writeFile(gitCount, '');
+    await writeFile(whereCount, '');
+    await writeFile(
+      join(bin, 'git'),
+      `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.appendFileSync(${JSON.stringify(gitCount)}, 'git\\n');
+process.stdout.write(fs.readFileSync(${JSON.stringify(commonDirFile)}, 'utf8'));
+`,
+      { mode: 0o700 },
+    );
+    await writeFile(
+      bdPath,
+      `#!/usr/bin/env node
+const fs = require('node:fs');
+if (process.argv.includes('where')) {
+  fs.appendFileSync(${JSON.stringify(whereCount)}, 'where\\n');
+  process.stdout.write(JSON.stringify({ path: ${JSON.stringify(beads)} }));
+  process.exit(0);
+}
+process.stdout.write('[]');
+`,
+      { mode: 0o700 },
+    );
+    await chmod(join(bin, 'git'), 0o700);
+    await chmod(bdPath, 0o700);
+    process.env.PATH = [bin, previousPath].filter(Boolean).join(delimiter);
+
+    try {
+      const first = await canonicalProject({ cwd, bdPath, timeoutMs: 5000 });
+      assert.equal(first.canonicalRoot, commonA);
+      await writeFile(join(cwd, '.git'), 'gitdir: common-b\n');
+      await writeFile(commonDirFile, commonB);
+      const second = await canonicalProject({ cwd, bdPath, timeoutMs: 5000 });
+      assert.equal(second.canonicalRoot, commonB);
+      assert.equal(
+        (await readFile(gitCount, 'utf8')).trim().split('\n').length,
+        2,
       );
     } finally {
       process.env.PATH = previousPath;

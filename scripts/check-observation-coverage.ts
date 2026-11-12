@@ -10,7 +10,6 @@ const files = [
   'src/adapters/opencode-sessions.ts',
   'src/adapters/beads-cli.ts',
   'src/bootstrap/server.ts',
-  'src/bootstrap/hub-daemon.ts',
 ];
 const git = (...args: string[]) =>
   execFileSync('git', args, { encoding: 'utf8' }).trim();
@@ -41,6 +40,8 @@ const tests = [
   'opencode-session-rpc-budget.test.js',
   'beads-cli.test.js',
   'beads-cli-overhead.test.js',
+  'canonical-project-cache.test.js',
+  'server-bootstrap-coverage.test.js',
   'project-registry.test.js',
   'project-preferences.test.js',
 ].map((name) => `coverage/build/test/${name}`);
@@ -51,7 +52,6 @@ run([
   '--test-coverage-include=**/src/adapters/opencode-*.*',
   '--test-coverage-include=**/src/adapters/beads-cli.*',
   '--test-coverage-include=**/src/bootstrap/server.*',
-  '--test-coverage-include=**/src/bootstrap/hub-daemon.*',
   '--test-reporter=spec',
   '--test-reporter-destination=stdout',
   '--test-reporter=' +
@@ -108,7 +108,7 @@ const report = {
   node: process.version,
   generatedAt: new Date().toISOString(),
   scope:
-    'Full source-mapped line and branch coverage of the established session-observation adapters and every runtime file changed for the Beads/Git overhead fix, including inherited branches. No coverage exclusions are used.',
+    'Full source-mapped line and branch coverage of the established session-observation adapters and every runtime file changed for the Beads/Git overhead fix. The unchanged hub daemon is not part of this gate. No coverage exclusions are used.',
   results,
 };
 await writeFile(
