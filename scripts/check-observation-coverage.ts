@@ -42,6 +42,7 @@ const tests = [
   'beads-cli-overhead.test.js',
   'canonical-project-cache.test.js',
   'server-bootstrap-coverage.test.js',
+  'server-adaptive-poll.test.js',
   'project-registry.test.js',
   'project-preferences.test.js',
 ].map((name) => `coverage/build/test/${name}`);

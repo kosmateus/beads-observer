@@ -271,6 +271,7 @@ export function configurationSignature(config: ProjectOptions) {
     !!config.demo,
   ]);
 }
+const MAX_STABLE_POLL_INTERVAL_MS = 8000;
 export async function startServer(options: ServerOptions = {}) {
   const port = options.port ?? 4317;
   if (!Number.isInteger(port) || port < 0 || port > 65535)
@@ -291,6 +292,9 @@ export async function startServer(options: ServerOptions = {}) {
         observer: Observer;
         signature: string;
         timer: ReturnType<typeof setTimeout> | null;
+        pollIntervalMs: number;
+        polling: boolean;
+        off: () => void;
         stopped: boolean;
       }
     >();
@@ -325,9 +329,47 @@ export async function startServer(options: ServerOptions = {}) {
       observer: Observer;
       signature: string;
       timer: ReturnType<typeof setTimeout> | null;
+      pollIntervalMs: number;
+      polling: boolean;
+      off: () => void;
       stopped: boolean;
-    } = { observer, signature, timer: null, stopped: false };
+    } = {
+      observer,
+      signature,
+      timer: null,
+      pollIntervalMs: config.pollIntervalMs,
+      polling: false,
+      off: () => {},
+      stopped: false,
+    };
     running.set(config.id, record);
+    const schedule = () => {
+      if (record.timer) clearTimeout(record.timer);
+      record.timer = setTimeout(poll, record.pollIntervalMs);
+      record.timer.unref();
+    };
+    const poll = async () => {
+      record.timer = null;
+      const revision = observer.state.revision,
+        hadError = !!observer.state.error;
+      record.polling = true;
+      await observer.refresh();
+      record.polling = false;
+      if (record.stopped) return;
+      record.pollIntervalMs =
+        observer.state.error || hadError || observer.state.revision !== revision
+          ? config.pollIntervalMs
+          : Math.min(
+              Math.max(config.pollIntervalMs, MAX_STABLE_POLL_INTERVAL_MS),
+              record.pollIntervalMs * 2,
+            );
+      schedule();
+    };
+    record.off = observer.subscribe(() => {
+      if (record.polling || record.stopped) return;
+      record.pollIntervalMs = config.pollIntervalMs;
+      schedule();
+    });
     projects.add({
       id: config.id,
       cwd: config.cwd,
@@ -343,13 +385,6 @@ export async function startServer(options: ServerOptions = {}) {
             : null),
       observer,
     });
-    const poll = async () => {
-      await observer.refresh();
-      if (!record.stopped) {
-        record.timer = setTimeout(poll, config.pollIntervalMs);
-        record.timer.unref();
-      }
-    };
     void poll();
     return config.id;
   }
@@ -358,6 +393,7 @@ export async function startServer(options: ServerOptions = {}) {
     if (record) {
       record.stopped = true;
       if (record.timer) clearTimeout(record.timer);
+      record.off();
       running.delete(id);
       projects.remove(id);
     }
